@@ -17,4 +17,14 @@ export async function runMigrations(database: Database, through?: string): Promi
     await database.executeScript(await readFile(join(migrationsDirectory, file), 'utf8'));
     await database.query('INSERT INTO _legacy_migrations (name) VALUES ($1)', [file]);
   }
+  if (!through) {
+    const prismaDirectory = join(migrationsDirectory, '../prisma/migrations');
+    const versions = (await readdir(prismaDirectory)).filter((name) => /^\d/.test(name) && name !== '00000000000000_baseline').sort();
+    for (const version of versions) {
+      const key = `prisma/${version}`;
+      if ((await database.query('SELECT name FROM _legacy_migrations WHERE name = $1', [key])).rows.length) continue;
+      await database.executeScript(await readFile(join(prismaDirectory, version, 'migration.sql'), 'utf8'));
+      await database.query('INSERT INTO _legacy_migrations (name) VALUES ($1)', [key]);
+    }
+  }
 }

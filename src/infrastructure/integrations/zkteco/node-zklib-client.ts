@@ -1,130 +1,94 @@
-import ZKLib from 'node-zklib';
+import { fork } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import type { Device } from '../../../domain/entities/device.js';
 import type { DeviceInfo, ZktecoAttendanceEvent, ZktecoDeviceClient, ZktecoUser } from '../../../domain/datasources/device-client.js';
-import { dateAtLocalTime } from '../../../domain/entities/schedule-evaluator.js';
-import { ExternalServiceError, errorMessage } from '../../../domain/errors/app-error.js';
-import { withTimeout } from '../with-timeout.js';
+import { ExternalServiceError } from '../../../domain/errors/app-error.js';
+import { isWorkerResponse, type DeviceOperation, type ZktecoWorkerRequest, type ZktecoWorkerResponse } from './worker-protocol.js';
 
-function getDeviceLocalTime(value: Date): { date: string; time: string; localTime: string } {
-  const pad = (part: number) => String(part).padStart(2, '0');
-  const date = `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
-  const time = `${pad(value.getHours())}:${pad(value.getMinutes())}`;
-  return { date, time, localTime: `${date} ${time}:${pad(value.getSeconds())}` };
-}
+interface WorkerOptions { workerPath?: URL; operationTimeoutMs?: number; startupTimeoutMs?: number }
 
-type RawAttendance = {
-  id?: string | number;
-  userSn?: string | number;
-  userId?: string | number;
-  uid?: string | number;
-  deviceUserId?: string | number;
-  timestamp?: string | Date;
-  recordTime?: string | Date;
-  attTime?: string | Date;
-  verificationType?: number;
-  punchState?: number;
-  type?: number;
-  state?: number;
-  [key: string]: unknown;
-};
-
-type RawUser = {
-  userId?: string | number;
-  uid?: number;
-  name?: string;
-  role?: number;
-  cardno?: string | number;
-  password?: string;
-  [key: string]: unknown;
-};
+const maximumDiagnosticLength = 8_192;
+const workerFile = import.meta.url.endsWith('.ts') ? './node-zklib-worker.ts' : './node-zklib-worker.js';
+const typescriptLoader = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
 
 export class NodeZkLibClient implements ZktecoDeviceClient {
-  constructor(private readonly timeoutMs: number, private readonly inPort: number) {}
+  private readonly workerPath: URL;
+  private readonly operationTimeoutMs: number;
+  private readonly startupTimeoutMs: number;
 
-  async testConnection(device: Device): Promise<DeviceInfo> {
-    return this.withClient(device, async (client) => {
-      const info = await client.getInfo();
-      return { raw: info };
-    });
+  constructor(private readonly timeoutMs: number, private readonly inPort: number, options: WorkerOptions = {}) {
+    this.workerPath = options.workerPath ?? new URL(workerFile, import.meta.url);
+    this.operationTimeoutMs = options.operationTimeoutMs ?? 120_000;
+    this.startupTimeoutMs = options.startupTimeoutMs ?? 5_000;
   }
 
-  async getAttendance(device: Device): Promise<ZktecoAttendanceEvent[]> {
-    return this.withClient(device, async (client) => {
-      const response = await client.getAttendances();
-      if (response?.err) throw new ExternalServiceError(`El reloj no pudo entregar las checadas: ${errorMessage(response.err)}`);
-      const records: RawAttendance[] = Array.isArray(response?.data) ? response.data : [];
-      return records.map((record) => {
-        const timestamp = record.timestamp ?? record.recordTime ?? record.attTime;
-        let occurredAt = timestamp instanceof Date ? timestamp : new Date(String(timestamp));
-        let localTime: string | undefined;
-        // node-zklib interpreta la hora del reloj con la zona del servidor; se reconstruye usando la sucursal.
-        if (record.recordTime instanceof Date && timestamp === record.recordTime && device.timeZone && Number.isFinite(occurredAt.getTime())) {
-          const wallTime = getDeviceLocalTime(record.recordTime);
-          occurredAt = new Date(dateAtLocalTime(wallTime.date, wallTime.time, device.timeZone).getTime()
-            + record.recordTime.getSeconds() * 1000 + record.recordTime.getMilliseconds());
-          localTime = wallTime.localTime;
-        }
-        const deviceUserId = record.userId ?? record.uid ?? record.deviceUserId;
-        if (deviceUserId === undefined || deviceUserId === '') throw new Error('El reloj devolvió un registro sin identificador de usuario.');
-        if (Number.isNaN(occurredAt.getTime())) throw new Error('El reloj devolvió un registro con fecha inválida.');
-        return {
-          deviceLogId: record.id === undefined
-            ? record.userSn === undefined ? undefined : String(record.userSn)
-            : String(record.id),
-          userId: String(deviceUserId),
-          verificationType: typeof record.verificationType === 'number'
-            ? record.verificationType
-            : typeof record.type === 'number' ? record.type : undefined,
-          punchState: typeof record.punchState === 'number'
-            ? record.punchState
-            : typeof record.state === 'number' ? record.state : undefined,
-          occurredAt,
-          raw: localTime ? { ...record, deviceLocalTime: localTime, deviceTimeZone: device.timeZone } : record
-        };
-      });
-    });
-  }
+  testConnection(device: Device): Promise<DeviceInfo> { return this.execute('testConnection', device); }
+  getAttendance(device: Device): Promise<ZktecoAttendanceEvent[]> { return this.execute('getAttendance', device); }
+  getUsers(device: Device): Promise<ZktecoUser[]> { return this.execute('getUsers', device); }
 
-  async getUsers(device: Device): Promise<ZktecoUser[]> {
-    return this.withClient(device, async (client) => {
-      const response = await client.getUsers();
-      if (response?.err) throw new ExternalServiceError(`El reloj no pudo entregar los usuarios: ${errorMessage(response.err)}`);
-      const users: RawUser[] = Array.isArray(response?.data) ? response.data : [];
-      return users.map((user) => {
-        if (user.userId === undefined || user.userId === '') throw new Error('El reloj devolvió un usuario sin identificador.');
-        const name = typeof user.name === 'string' ? user.name.trim() : undefined;
-        const raw = {
-          userId: String(user.userId),
-          ...(typeof user.uid === 'number' ? { uid: user.uid } : {}),
-          ...(typeof user.role === 'number' ? { role: user.role } : {}),
-          ...(name ? { name } : {}),
-          ...(user.cardno !== undefined ? { cardno: String(user.cardno) } : {})
-        };
-        return {
-          userId: String(user.userId),
-          uid: typeof user.uid === 'number' ? user.uid : undefined,
-          name: name || undefined,
-          role: typeof user.role === 'number' ? user.role : undefined,
-          cardNumber: user.cardno === undefined ? undefined : String(user.cardno),
-          raw
-        };
-      });
-    });
-  }
-
-  private async withClient<T>(device: Device, callback: (client: ZKLib) => Promise<T>): Promise<T> {
-    const client = new ZKLib(device.ipAddress, device.tcpPort, this.timeoutMs, this.inPort);
+  private async execute<T>(operation: DeviceOperation, device: Device): Promise<T> {
     try {
-      return await withTimeout((async () => {
-        await client.createSocket();
-        return callback(client);
-      })(), this.timeoutMs, `Se agotó el tiempo de comunicación con ${device.name}.`);
+      return await this.runWorker<T>({ operation, device, timeoutMs: this.timeoutMs, operationTimeoutMs: this.operationTimeoutMs, inPort: this.inPort });
     } catch (error) {
       if (error instanceof ExternalServiceError) throw error;
-      throw new ExternalServiceError(`No se pudo completar la comunicación con ${device.name}: ${errorMessage(error)}`, 'EXTERNAL_SERVICE_ERROR', { cause: error });
-    } finally {
-      try { await withTimeout(client.disconnect(), this.timeoutMs, `Se agotó el tiempo de cierre de ${device.name}.`); }
-      catch (error) { console.warn(`No se pudo cerrar la conexión con ${device.name}: ${errorMessage(error)}`); }
+      throw new ExternalServiceError(`No se pudo iniciar el controlador de ${device.name}.`, 'EXTERNAL_SERVICE_ERROR', { cause: error });
     }
+  }
+
+  private runWorker<T>(request: ZktecoWorkerRequest): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const worker = fork(this.workerPath, [], {
+        execArgv: this.workerPath.pathname.endsWith('.ts') ? ['--import', typescriptLoader] : [],
+        serialization: 'advanced', stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+      });
+      let response: ZktecoWorkerResponse | undefined;
+      let failure: ExternalServiceError | undefined;
+      let diagnostic = '';
+      const fail = (error: ExternalServiceError) => {
+        failure ??= error;
+        worker.kill('SIGKILL');
+      };
+      const deadline = this.startupTimeoutMs + this.operationTimeoutMs + this.timeoutMs;
+      const timer = setTimeout(() => fail(new ExternalServiceError(
+        `Se agotó el tiempo del controlador de ${request.device.name}.`, 'EXTERNAL_SERVICE_TIMEOUT')), deadline);
+
+      worker.stderr?.on('data', (data: Buffer) => {
+        diagnostic = (diagnostic + data.toString('utf8')).slice(-maximumDiagnosticLength);
+      });
+      worker.on('error', (error) => fail(new ExternalServiceError(
+        `Falló el proceso del reloj ${request.device.name}.`, 'EXTERNAL_SERVICE_ERROR', { cause: error })));
+      worker.on('message', (message: unknown) => {
+        if (!isWorkerResponse(message) || response) {
+          fail(new ExternalServiceError(`El controlador de ${request.device.name} devolvió una respuesta inválida.`));
+          return;
+        }
+        response = message;
+      });
+      worker.once('disconnect', () => {
+        if (!response) fail(new ExternalServiceError(`El controlador de ${request.device.name} perdió la comunicación.`));
+      });
+      worker.once('close', (code, signal) => {
+        clearTimeout(timer);
+        if (failure) {
+          if (diagnostic && !failure.cause) failure.cause = new Error(diagnostic.trim());
+          return reject(failure);
+        }
+        if (response?.type === 'failure') {
+          const cause = new Error(response.error.message);
+          if (response.error.stack) cause.stack = response.error.stack;
+          return reject(new ExternalServiceError(response.error.message, response.error.code, { cause }));
+        }
+        if (code !== 0 || signal || !response) {
+          return reject(new ExternalServiceError(`El controlador de ${request.device.name} terminó inesperadamente.`,
+            'EXTERNAL_SERVICE_ERROR', { cause: new Error(diagnostic.trim() || `Exit: ${code}; signal: ${signal}`) }));
+        }
+        resolve(response.value as T);
+      });
+      worker.send(request, (error) => {
+        if (error) fail(new ExternalServiceError(`No se pudo enviar la solicitud al controlador de ${request.device.name}.`,
+          'EXTERNAL_SERVICE_ERROR', { cause: error }));
+      });
+    });
   }
 }

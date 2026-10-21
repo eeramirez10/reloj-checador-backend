@@ -7,7 +7,7 @@ export const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value)
   const date = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }, 'Fecha inválida.');
-const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+export const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 export const timeZoneSchema = z.string().refine((value) => {
   try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; } catch { return false; }
 }, 'Zona horaria inválida.');
@@ -48,6 +48,8 @@ export const scheduleSettingsSchema = z.object({
   mealStart: timeSchema,
   mealEnd: timeSchema,
   mealDurationMinutes: z.number().int().min(1).max(240),
+  mealMode: z.enum(['schedule', 'individual']).optional(),
+  recognitionMarginMinutes: z.number().int().min(0).max(120).optional(),
 }).superRefine((value, context) => {
   if (value.entryTime >= value.exitTime) context.addIssue({ code: 'custom', message: 'La salida debe ser posterior a la entrada en el mismo día.' });
   if (value.mealEnabled && (value.mealStart <= value.entryTime || value.mealEnd < value.mealStart || value.mealEnd >= value.exitTime)) {

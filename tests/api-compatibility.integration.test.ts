@@ -5,6 +5,7 @@ import { Database } from '../src/infrastructure/database/database.js';
 import { runMigrations } from '../src/infrastructure/database/legacy-migrations.js';
 import { ExternalServiceError } from '../src/domain/errors/app-error.js';
 import type { DeviceClientFactory, PhotoClient } from '../src/domain/datasources/device-client.js';
+import { NodeZkLibClient } from '../src/infrastructure/integrations/zkteco/node-zklib-client.js';
 
 const connection = process.env.INTEGRATION_DATABASE_URL;
 const integration = connection ? describe : describe.skip;
@@ -100,5 +101,59 @@ integration('API compatibility through Prisma and clean architecture', () => {
     const missing = await app.inject({ method: 'POST', url: '/devices', payload: { name: 'Sin sucursal', ipAddress: '127.0.0.11', branchId: randomUUID() } });
     expect(missing.statusCode).toBe(400);
     expect(missing.json()).not.toHaveProperty('stack');
+  });
+
+  it('keeps the API and synchronization usable after a native SDK callback crashes', async () => {
+    const client = new NodeZkLibClient(1_000, 5_200, {
+      workerPath: new URL('./fixtures/zkteco-worker.cjs', import.meta.url), operationTimeoutMs: 1_000,
+    });
+    const isolated = await buildApp({ database, clients: { getClient: () => client }, photoBridge });
+    try {
+      await isolated.app.inject({ method: 'PATCH', url: `/devices/${deviceId}`, payload: { name: 'crash' } });
+      const failed = await isolated.app.inject({ method: 'POST', url: `/devices/${deviceId}/sync-attendance` });
+      expect(failed.statusCode).toBe(502);
+      expect((await isolated.app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
+      const runs = (await isolated.app.inject({ method: 'GET', url: `/sync-runs?deviceId=${deviceId}` })).json();
+      expect(runs[0]).toMatchObject({ status: 'failed', syncType: 'attendance' });
+      await isolated.app.inject({ method: 'PATCH', url: `/devices/${deviceId}`, payload: { name: 'healthy' } });
+      const recovered = await isolated.app.inject({ method: 'POST', url: `/devices/${deviceId}/sync-attendance` });
+      expect(recovered.statusCode).toBe(200);
+      expect(recovered.json()).toMatchObject({ status: 'succeeded', receivedCount: 1, insertedCount: 1 });
+    } finally { await isolated.app.close(); }
+  });
+
+  it('uses the photo from the original punch device even when clock IDs repeat or the assigned clock changes', async () => {
+    const firstUser = (await app.inject({ method: 'GET', url: `/users?deviceId=${deviceId}` })).json()[0];
+    const secondClock = await app.inject({ method: 'POST', url: '/devices', payload: {
+      name: 'Otro reloj', ipAddress: '127.0.0.12', branchId,
+    } });
+    expect(secondClock.statusCode).toBe(201);
+    const secondDeviceId = secondClock.json<{ id: string }>().id;
+    expect((await app.inject({ method: 'POST', url: `/devices/${secondDeviceId}/sync-users` })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: `/devices/${secondDeviceId}/sync-attendance` })).statusCode).toBe(200);
+    const secondUser = (await app.inject({ method: 'GET', url: `/users?deviceId=${secondDeviceId}` })).json()[0];
+    expect(secondUser.userId).toBe(firstUser.userId);
+    expect(secondUser.employeeId).not.toBe(firstUser.employeeId);
+
+    const reportUrl = '/attendance/daily?from=2025-10-21&to=2025-10-22';
+    const withoutSecondPhoto = (await app.inject({ method: 'GET', url: reportUrl })).json();
+    expect(withoutSecondPhoto.find((day: { employeeId: string }) => day.employeeId === secondUser.employeeId).photo).toBeNull();
+    expect(withoutSecondPhoto.find((day: { employeeId: string }) => day.employeeId === firstUser.employeeId).photo)
+      .toEqual({ deviceId, userId: '1', hasPhoto: true });
+
+    expect((await app.inject({ method: 'POST', url: `/devices/${secondDeviceId}/sync-user-photos`, payload: { userIds: ['1'] } })).statusCode).toBe(200);
+    const withSecondPhoto = (await app.inject({ method: 'GET', url: reportUrl })).json();
+    expect(withSecondPhoto.find((day: { employeeId: string }) => day.employeeId === secondUser.employeeId).photo)
+      .toEqual({ deviceId: secondDeviceId, userId: '1', hasPhoto: true });
+
+    expect((await app.inject({ method: 'POST', url: `/employees/${firstUser.employeeId}/identify`,
+      payload: { firstName: 'Ana', lastName: 'Prueba' } })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: `/employees/${firstUser.employeeId}/clock-record`,
+      payload: { clockRecordId: secondUser.id } })).statusCode).toBe(204);
+    const employee = (await app.inject({ method: 'GET', url: `/employees/${firstUser.employeeId}` })).json();
+    expect(employee.clockRecords.find((record: { bindingStatus: string }) => record.bindingStatus === 'active').deviceId).toBe(secondDeviceId);
+    const history = (await app.inject({ method: 'GET', url: reportUrl })).json();
+    expect(history.find((day: { date: string }) => day.date === '2025-10-22').photo)
+      .toEqual({ deviceId, userId: '1', hasPhoto: true });
   });
 });

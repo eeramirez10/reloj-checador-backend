@@ -1,6 +1,7 @@
 import type { Branch, BranchPolicy, WorkSchedule } from '../entities/organization.js';
 import type { CalculatedDeduction, DailyEvaluation } from '../entities/schedule-evaluator.js';
 import type { ReportFilters } from '../dtos/filters.js';
+import type { EmployeeScheduleVersion } from '../entities/employee-scheduling.js';
 
 export interface SubjectLog {
   id: string; employeeId: string | null; deviceUserId: string; subjectId: string; name: string;
@@ -11,6 +12,7 @@ export interface EvaluationSnapshot {
   branches: EvaluationBranch[]; policies: BranchPolicy[]; schedules: WorkSchedule[]; logs: SubjectLog[];
   assignments: Array<{ employeeId: string | null; deviceUserId: string | null; scheduleId: string | null; effectiveFrom: string }>;
   branchAssignments: Array<{ targetId: string; branchId: string; effectiveFrom: string }>;
+  employeeSchedules: EmployeeScheduleVersion[];
 }
 export interface EvaluationWrite {
   subjectId: string; employeeId: string | null; deviceUserId: string | null; date: string;

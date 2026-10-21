@@ -33,6 +33,7 @@ type EmployeeRow = {
   is_active: boolean;
   original_name: string | null;
   name_split_method: string | null;
+  scheduling: Employee['scheduling'] | null;
 };
 
 const statusExpression = `CASE WHEN is_active THEN 'active' ELSE 'inactive' END`;
@@ -42,6 +43,11 @@ const selectColumns = `id, employee_number, normalized_employee_number, name, fi
   termination_date::text AS termination_date, ${statusExpression} AS employment_status, created_at, updated_at, branch_id,
   (SELECT name FROM branches WHERE id = employees.branch_id) AS branch_name,
   identification_status, merged_into_id, is_active, original_name, name_split_method,
+  (SELECT jsonb_build_object('versionId', v.id, 'effectiveFrom', v.effective_from::text, 'workHours', v.work_hours,
+    'meal', v.meal, 'recognitionMarginMinutes', v.recognition_margin_minutes)
+    FROM employee_schedule_versions v WHERE v.employee_id=employees.id
+      AND v.effective_from <= (NOW() AT TIME ZONE COALESCE((SELECT time_zone FROM branches WHERE id=employees.branch_id),'America/Mexico_City'))::date
+    ORDER BY v.effective_from DESC,v.created_at DESC,v.id DESC LIMIT 1) AS scheduling,
   COALESCE((SELECT jsonb_agg(jsonb_build_object(
     'id', u.id, 'deviceId', u.device_id, 'userId', u.device_user_id, 'name', u.name, 'deviceName', d.name,
     'branchId', d.branch_id, 'bindingStatus', u.binding_status, 'syncedAt', u.synced_at,
@@ -79,6 +85,7 @@ const mapRow = (row: EmployeeRow): Employee => ({
   isActive: row.is_active,
   originalName: row.original_name ?? undefined,
   nameSplitMethod: row.name_split_method ?? undefined,
+  scheduling: row.scheduling ?? undefined,
 });
 
 export class PrismaEmployeeDatasource implements EmployeeDatasource {

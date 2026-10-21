@@ -2,6 +2,7 @@ import type { FastifyRequest } from 'fastify';
 import { formatDateTimeInTimeZone, summarizeAttendance } from '../../domain/entities/attendance-summary.js';
 import type { ApplicationServices } from '../services.js';
 import { attendanceQuerySchema, reportSchema, summaryQuerySchema, userParams } from '../validators/attendance.js';
+import { addDays, type DailyEvaluation } from '../../domain/entities/schedule-evaluator.js';
 
 export class AttendanceController {
   constructor(private readonly services: Pick<ApplicationServices, 'attendance' | 'evaluation'>) {}
@@ -17,7 +18,14 @@ export class AttendanceController {
     const query = summaryQuerySchema.parse(request.query);
     const logs = await this.services.attendance.list({ ...query, userId, limit: 5_000 });
     const local = (date: Date) => formatDateTimeInTimeZone(date, query.timeZone);
-    const summaries = summarizeAttendance(logs, query.timeZone).map((summary) => ({
+    const dates = logs.map((log) => local(log.occurredAt).slice(0, 10)).sort();
+    const subjects = [...new Set(logs.map((log) => log.employeeId).filter((id): id is string => Boolean(id)))];
+    const reports = dates.length ? (await Promise.all(subjects.map((subjectId) => this.services.evaluation.report({
+      from: addDays(dates[0], -1), to: addDays(dates.at(-1)!, 1), subjectId,
+    })))).flat() : [];
+    const logIds = new Set(logs.map((log) => log.id));
+    const matching = reports.filter((report) => (report.result as DailyEvaluation).punches.some((punch) => logIds.has(punch.id)));
+    const summaries = summarizeAttendance(matching.map((report) => report.result as DailyEvaluation)).map((summary) => ({
       ...summary,
       firstEntryLocal: summary.firstEntry && local(summary.firstEntry), lastExitLocal: summary.lastExit && local(summary.lastExit),
       openEntryLocal: summary.openEntry && local(summary.openEntry),

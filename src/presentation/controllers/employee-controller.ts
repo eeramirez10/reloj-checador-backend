@@ -4,9 +4,12 @@ import type { ApplicationServices } from '../services.js';
 import { idParams } from '../validators/common.js';
 import { employeeClockSchema, employeeCreateSchema, employeeEditSchema, employeeIdentifySchema, employeeListSchema } from '../validators/employee.js';
 import { userProfileSchema } from '../validators/personal-profile.js';
+import { z } from 'zod';
+import { dateSchema } from '../validators/organization.js';
+import { employeeSchedulingSchema } from '../validators/employee-scheduling.js';
 
 export class EmployeeController {
-  constructor(private readonly services: Pick<ApplicationServices, 'employees' | 'organization' | 'registry' | 'evaluation' | 'updateEmployee' | 'profiles'>) {}
+  constructor(private readonly services: Pick<ApplicationServices, 'employees' | 'organization' | 'registry' | 'evaluation' | 'updateEmployee' | 'profiles' | 'employeeScheduling'>) {}
 
   list = async (request: FastifyRequest) => {
     await this.services.organization.refreshCurrentBranches();
@@ -40,10 +43,19 @@ export class EmployeeController {
 
   update = async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = idParams.parse(request.params);
-    const { socialSecurityNumber, isActive, ...remaining } = employeeEditSchema.parse(request.body);
+    const { socialSecurityNumber, isActive, scheduling, ...remaining } = employeeEditSchema.parse(request.body);
     const fields = Object.fromEntries(Object.entries({ ...remaining, ...(socialSecurityNumber !== undefined ? { imss: socialSecurityNumber } : {}) })
       .filter(([, value]) => value !== undefined)) as Record<string, string | null>;
-    if (!await this.services.updateEmployee.execute(id, fields, isActive)) throw new NotFoundError('Empleado no encontrado o sin cambios.');
+    if (!await this.services.updateEmployee.execute(id, fields, isActive, scheduling)) throw new NotFoundError('Empleado no encontrado o sin cambios.');
+    await this.services.evaluation.recalculate();
+    return reply.code(204).send();
+  };
+
+  scheduling = (request: FastifyRequest) => this.services.employeeScheduling.execute(
+    idParams.parse(request.params).id, z.object({ date: dateSchema.optional() }).parse(request.query).date);
+
+  saveScheduling = async (request: FastifyRequest, reply: FastifyReply) => {
+    await this.services.updateEmployee.execute(idParams.parse(request.params).id, {}, undefined, employeeSchedulingSchema.parse(request.body));
     await this.services.evaluation.recalculate();
     return reply.code(204).send();
   };

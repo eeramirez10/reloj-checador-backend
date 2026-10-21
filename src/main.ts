@@ -30,6 +30,9 @@ import { UserPhotoSyncService } from './domain/use-cases/sync-user-photos.js';
 import { UpdateEmployee } from './domain/use-cases/update-employee.js';
 import type { DeviceClientFactory, PhotoClient } from './domain/datasources/device-client.js';
 import { createHttpServer } from './presentation/http-server.js';
+import { PrismaEmployeeSchedulingDatasource } from './infrastructure/datasources/employee-scheduling-datasource.js';
+import { EmployeeSchedulingRepositoryImpl } from './infrastructure/repositories/employee-scheduling-repository.js';
+import { GetEmployeeScheduling } from './domain/use-cases/get-employee-scheduling.js';
 
 export function createAttendanceEvaluation(database: Database, organization: PrismaOrganizationDatasource) {
   return new AttendanceEvaluationService(new EvaluationRepositoryImpl(new PrismaEvaluationDatasource(database,
@@ -62,8 +65,10 @@ export async function buildApp(dependencies: AppDependencies = {}) {
     const evaluation = createAttendanceEvaluation(database, organizationDatasource);
     const registry = createEmployeeRegistry(database, organizationDatasource);
     const employeeNames = createEmployeeNames(database);
+    const employeeScheduling = new GetEmployeeScheduling(new EmployeeSchedulingRepositoryImpl(new PrismaEmployeeSchedulingDatasource(database)));
     const updateEmployee = new UpdateEmployee(new PrismaUnitOfWork(database, (client) => ({
       employees: new EmployeeRepositoryImpl(new PrismaEmployeeDatasource(client)),
+      employeeScheduling: new EmployeeSchedulingRepositoryImpl(new PrismaEmployeeSchedulingDatasource(client)),
     })));
     const clients = dependencies.clients ?? new ZktecoClientFactory();
     const photoBridge = dependencies.photoBridge ?? new ZktecoPhotoBridgeClient(env.ZK_PHOTO_BRIDGE_URL);
@@ -73,7 +78,7 @@ export async function buildApp(dependencies: AppDependencies = {}) {
     const userSyncService = new UserSyncService(users, syncRuns, clients, syncService, recalculate);
     const userPhotoSyncService = new UserPhotoSyncService(users, photos, syncRuns, photoBridge, syncService);
     const app = await createHttpServer({
-      devices, attendance, syncRuns, users, photos, employees, organization, profiles, registry, evaluation, updateEmployee,
+      devices, attendance, syncRuns, users, photos, employees, organization, profiles, registry, evaluation, updateEmployee, employeeScheduling,
       clients, syncService, userSyncService, userPhotoSyncService, defaultDriver: env.ZK_DRIVER,
       checkHealth: async () => { await database.query('SELECT 1'); },
     }, persistenceError);

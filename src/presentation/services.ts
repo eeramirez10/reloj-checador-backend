@@ -12,12 +12,14 @@ import type { SyncService } from '../domain/use-cases/sync-attendance.js';
 import type { UserPhotoSyncService } from '../domain/use-cases/sync-user-photos.js';
 import type { UserSyncService } from '../domain/use-cases/sync-users.js';
 import type { UpdateEmployee } from '../domain/use-cases/update-employee.js';
+import type { GetEmployeeScheduling } from '../domain/use-cases/get-employee-scheduling.js';
 
 export interface ApplicationServices {
   devices: DeviceRepository; attendance: AttendanceRepository; syncRuns: SyncRepository;
   users: DeviceUserRepository; photos: DeviceUserPhotoRepository; employees: EmployeeRepository;
   organization: OrganizationRepository; profiles: UserProfileRepository; registry: EmployeeRegistry;
   evaluation: AttendanceEvaluationService; updateEmployee: UpdateEmployee; clients: DeviceClientFactory;
+  employeeScheduling: GetEmployeeScheduling;
   syncService: SyncService; userSyncService: UserSyncService; userPhotoSyncService: UserPhotoSyncService;
   defaultDriver: DeviceDriver; checkHealth: () => Promise<void>;
 }

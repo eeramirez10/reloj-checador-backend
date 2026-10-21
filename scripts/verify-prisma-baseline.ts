@@ -1,6 +1,9 @@
 import { deepStrictEqual } from 'node:assert';
 import pg from 'pg';
 import { databaseUrl, deployMigrations, withTemporaryDatabase } from './database-tools.js';
+import { readFile } from 'node:fs/promises';
+
+const baselineOnly = process.argv.includes('--baseline-only');
 
 async function schemaInventory(url: string) {
   const pool = new pg.Pool({ connectionString: url });
@@ -19,8 +22,13 @@ async function schemaInventory(url: string) {
 }
 
 await withTemporaryDatabase('verify_prisma', async (url) => {
-  deployMigrations(url);
+  if (baselineOnly) {
+    const pool = new pg.Pool({ connectionString: url });
+    try { await pool.query(await readFile(new URL('../prisma/migrations/00000000000000_baseline/migration.sql', import.meta.url), 'utf8')); }
+    finally { await pool.end(); }
+  } else deployMigrations(url);
   deepStrictEqual(await schemaInventory(url), await schemaInventory(databaseUrl!), 'La baseline debe reproducir columnas, restricciones e índices existentes.');
-  deployMigrations(url);
-  console.log('Baseline verificada: esquema equivalente, restricciones e índices conservados y despliegue idempotente.');
+  if (!baselineOnly) deployMigrations(url);
+  console.log(baselineOnly ? 'Baseline histórica verificada: columnas, restricciones e índices equivalentes.'
+    : 'Baseline verificada: esquema equivalente, restricciones e índices conservados y despliegue idempotente.');
 });

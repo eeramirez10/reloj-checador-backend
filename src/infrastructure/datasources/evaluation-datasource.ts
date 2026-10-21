@@ -6,6 +6,8 @@ import type { BranchPolicy, WorkSchedule } from '../../domain/entities/organizat
 import type { ReportFilters } from '../../domain/dtos/filters.js';
 import type { Database, Queryable } from '../database/database.js';
 import type { Prisma } from '../database/generated/client.js';
+import type { EmployeeScheduleVersion } from '../../domain/entities/employee-scheduling.js';
+import { scheduleVersionColumns } from './employee-scheduling-datasource.js';
 
 class PrismaEvaluationSession implements EvaluationSession {
   constructor(private readonly database: Queryable) {}
@@ -13,7 +15,7 @@ class PrismaEvaluationSession implements EvaluationSession {
   async snapshot(): Promise<EvaluationSnapshot> {
     const branches = (await this.database.query<EvaluationSnapshot['branches'][number]>('SELECT id, name, time_zone AS "timeZone" FROM branches')).rows;
     const policies = (await this.database.query<BranchPolicy>('SELECT id, branch_id AS "branchId", effective_from::text AS "effectiveFrom", settings, created_at AS "createdAt" FROM branch_policies ORDER BY effective_from DESC, created_at DESC')).rows;
-    const schedules = (await this.database.query<WorkSchedule>('SELECT id, branch_id AS "branchId", name, effective_from::text AS "effectiveFrom", is_default AS "isDefault", settings, created_at AS "createdAt" FROM work_schedules ORDER BY effective_from DESC, created_at DESC')).rows;
+    const schedules = (await this.database.query<WorkSchedule>('SELECT id, branch_id AS "branchId", name, effective_from::text AS "effectiveFrom", is_default AS "isDefault", settings, created_at AS "createdAt", superseded_from::text AS "supersededFrom" FROM work_schedules ORDER BY effective_from DESC, created_at DESC')).rows;
     const assignments = (await this.database.query<EvaluationSnapshot['assignments'][number]>('SELECT employee_id AS "employeeId", device_user_id AS "deviceUserId", schedule_id AS "scheduleId", effective_from::text AS "effectiveFrom" FROM schedule_assignments')).rows;
     const branchAssignments = (await this.database.query<EvaluationSnapshot['branchAssignments'][number]>('SELECT COALESCE(employee_id, device_user_id) AS "targetId", branch_id AS "branchId", effective_from::text AS "effectiveFrom" FROM branch_assignments WHERE device_id IS NULL')).rows;
     const logs = (await this.database.query<SubjectLog>(`SELECT a.id, u.employee_id AS "employeeId", u.id AS "deviceUserId", COALESCE(u.employee_id, u.id) AS "subjectId",
@@ -24,7 +26,8 @@ class PrismaEvaluationSession implements EvaluationSession {
       WHERE a.occurred_at <= NOW() AND NOT (a.device_log_id IS NULL AND a.raw_data ? 'userSn'
         AND EXISTS (SELECT 1 FROM attendance_logs newer WHERE newer.device_id = a.device_id AND newer.device_log_id = a.raw_data ->> 'userSn'))
       ORDER BY a.occurred_at, a.id`)).rows;
-    return { branches, policies, schedules, assignments, branchAssignments, logs };
+    const employeeSchedules = (await this.database.query<EmployeeScheduleVersion>(`SELECT ${scheduleVersionColumns} FROM employee_schedule_versions ORDER BY created_at DESC,id DESC`)).rows;
+    return { branches, policies, schedules, assignments, branchAssignments, logs, employeeSchedules };
   }
 
   async saveEvaluation(input: EvaluationWrite): Promise<string> {
@@ -85,9 +88,18 @@ export class PrismaEvaluationDatasource implements EvaluationDatasource {
   }
 
   async report(filters: ReportFilters) {
-    return (await this.database.query(`SELECT id, subject_id AS "subjectId", employee_id AS "employeeId", device_user_id AS "deviceUserId",
-      date::text, branch_id AS "branchId", result FROM attendance_evaluations WHERE active AND date BETWEEN $1::date AND $2::date
-      AND ($3::uuid IS NULL OR branch_id = $3) AND ($4::uuid IS NULL OR subject_id = $4) ORDER BY date DESC, result ->> 'name'`,
+    return (await this.database.query(`SELECT ev.id, ev.subject_id AS "subjectId", ev.employee_id AS "employeeId", ev.device_user_id AS "deviceUserId",
+      ev.date::text, ev.branch_id AS "branchId", ev.result,
+      (SELECT jsonb_build_object('deviceId', a.device_id, 'userId', a.user_id, 'hasPhoto', TRUE)
+        FROM jsonb_array_elements(ev.result -> 'punches') AS punch(value)
+        JOIN attendance_logs a ON a.id = (punch.value ->> 'id')::uuid
+        JOIN device_user_photos p ON p.device_id = a.device_id AND p.device_user_id = a.user_id
+        ORDER BY a.occurred_at DESC, a.id DESC LIMIT 1) AS photo
+      FROM attendance_evaluations ev WHERE ev.active AND ev.date BETWEEN $1::date AND $2::date
+      AND ($3::uuid IS NULL OR ev.branch_id = $3) AND ($4::uuid IS NULL OR ev.subject_id = $4)
+      ORDER BY ev.date DESC,
+        ((ev.result ->> 'entry')::timestamptz AT TIME ZONE COALESCE(ev.result ->> 'timeZone', 'America/Mexico_City')) ASC NULLS LAST,
+        ev.id`,
     [filters.from, filters.to, filters.branchId ?? null, filters.subjectId ?? null])).rows;
   }
 

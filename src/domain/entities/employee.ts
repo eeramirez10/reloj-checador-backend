@@ -1,3 +1,5 @@
+import type { EmployeeScheduleSettings } from './employee-scheduling.js';
+
 export type EmploymentStatus = 'active' | 'inactive' | 'pending';
 export interface EmployeeCatalogRecord {
   employeeNumber: string; normalizedEmployeeNumber: string; name: string; position?: string; rfc?: string; imss?: string;
@@ -14,6 +16,7 @@ export interface Employee extends Omit<EmployeeCatalogRecord, 'employeeNumber' |
   createdAt: Date; updatedAt: Date; branchId?: string; branchName?: string; firstName?: string; lastName?: string;
   identificationStatus: 'confirmed' | 'pending' | 'merged'; mergedIntoId?: string; clockRecords: EmployeeClockRecord[];
   isActive: boolean; originalName?: string; nameSplitMethod?: string;
+  scheduling?: EmployeeScheduleSettings & { versionId: string; effectiveFrom: string };
 }
 export function normalizeEmployeeNumber(employeeNumber: string): string {
   return employeeNumber.replace(/^0+/, '') || '0';

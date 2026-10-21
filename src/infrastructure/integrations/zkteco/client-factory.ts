@@ -5,7 +5,7 @@ import { SdkBridgeClient } from './sdk-bridge-client.js';
 import type { DeviceClientFactory, ZktecoDeviceClient } from '../../../domain/datasources/device-client.js';
 
 export class ZktecoClientFactory implements DeviceClientFactory {
-  private readonly nodeClient = new NodeZkLibClient(env.ZK_TIMEOUT_MS, env.ZK_INPORT);
+  private readonly nodeClient = new NodeZkLibClient(env.ZK_TIMEOUT_MS, env.ZK_INPORT, { operationTimeoutMs: env.ZK_OPERATION_TIMEOUT_MS });
   private readonly sdkBridgeClient = new SdkBridgeClient(env.ZK_SDK_BRIDGE_URL);
 
   getClient(device: Device): ZktecoDeviceClient {

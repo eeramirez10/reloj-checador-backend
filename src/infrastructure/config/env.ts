@@ -6,6 +6,7 @@ const schema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   DATABASE_URL: z.string().url(),
   ZK_TIMEOUT_MS: z.coerce.number().int().min(1000).default(10_000),
+  ZK_OPERATION_TIMEOUT_MS: z.coerce.number().int().min(1000).default(120_000),
   ZK_INPORT: z.coerce.number().int().min(1).max(65535).default(5200),
   SYNC_INTERVAL_SECONDS: z.coerce.number().int().min(15).default(60),
   ZK_DRIVER: z.enum(['node', 'sdk-bridge']).default('node'),

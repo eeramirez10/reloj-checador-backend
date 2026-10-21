@@ -122,7 +122,7 @@ integration('organization and scheduled attendance in PostgreSQL', () => {
     } finally { await app.close(); }
   }, 30000);
 
-  it('saves branch and schedule assignments atomically and can restore branch defaults', async () => {
+  it('saves assignments atomically and restores branch work hours without clearing the individual meal', async () => {
     const before = (await database.query('SELECT COUNT(*)::int AS count FROM branch_assignments')).rows[0].count;
     await expect(organization.assign({ employeeIds: [employeeId], deviceUserIds: [], branchId: firstBranchId, scheduleId,
       effectiveFrom: '2024-01-01' })).rejects.toThrow('vigencia');
@@ -135,8 +135,10 @@ integration('organization and scheduled attendance in PostgreSQL', () => {
     await evaluation.recalculate();
     const report = await evaluation.report({ from: '2025-10-28', to: '2025-11-03' });
     expect(report.find((day) => day.date === '2025-10-28')?.result.expectedMealReturn).toBeDefined();
-    expect(report.find((day) => day.date === '2025-11-03')?.result).toMatchObject({ scheduleName: 'Base sin comida', incidents: [] });
-    expect(report.find((day) => day.date === '2025-11-03')?.result.expectedMealReturn).toBeUndefined();
+    expect(report.find((day) => day.date === '2025-11-03')?.result).toMatchObject({ scheduleName: 'Base sin comida', scheduleSource: 'branch' });
+    expect(report.find((day) => day.date === '2025-11-03')?.result.expectedMealReturn).toBeDefined();
+    expect(report.find((day) => day.date === '2025-11-03')?.result.incidents.map((incident: { kind: string }) => incident.kind))
+      .toEqual(['meal_departure', 'meal_return']);
   }, 30000);
 
   it('updates branch-local hours and daily boundaries after changing the time zone while preserving UTC instants', async () => {
@@ -159,6 +161,9 @@ integration('organization and scheduled attendance in PostgreSQL', () => {
       const updated = await evaluation.report({ from: '2025-11-04', to: '2025-11-05', branchId: branch.id });
       expect(updated).toHaveLength(1);
       expect(updated[0].date).toBe('2025-11-05');
+      const summary = await app.inject({ method: 'GET', url: `/users/601/attendance-summary?deviceId=${device.id}` });
+      expect(summary.statusCode).toBe(200);
+      expect(summary.json().summaries[0].date).toBe('2025-11-05');
       expect(updated[0].result.timeZone).toBe('America/Cancun');
       expect(updated[0].result.punches[0].localTime).toBe('2025-11-05 00:30:00');
       const logs = await app.inject({ method: 'GET', url: `/attendance?branchId=${branch.id}&timeZone=America%2FCancun&from=2025-11-05T05:00:00Z&to=2025-11-06T04:59:59.999Z` });

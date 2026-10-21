@@ -1,5 +1,3 @@
-import type { AttendanceLog } from './attendance.js';
-
 export interface AttendanceSession {
   entry: Date;
   exit?: Date;
@@ -11,16 +9,17 @@ export interface DailyAttendanceSummary {
   firstEntry?: Date;
   lastExit?: Date;
   openEntry?: Date;
-  workedMinutes: number;
+  workedMinutes: number | null;
   sessions: AttendanceSession[];
-  punches: Array<{ occurredAt: Date; type: 'entry' | 'exit' }>;
+  punches: Array<{ occurredAt: Date; type: 'entry' | 'exit' | 'unclassified'; movement: string }>;
   inferred: boolean;
+  issues: string[];
+  missingMovements: string[];
 }
 
-function localDate(date: Date, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
-  const value = (type: string) => parts.find((part) => part.type === type)?.value;
-  return `${value('year')}-${value('month')}-${value('day')}`;
+interface SummaryDay {
+  date: string; entry?: string; mealDeparture?: string; mealReturn?: string; exit?: string; workedMinutes?: number;
+  punches: Array<{ occurredAt: string; movement: string }>; issues: string[]; missingMovements?: string[];
 }
 
 export function formatDateTimeInTimeZone(date: Date, timeZone: string): string {
@@ -33,59 +32,25 @@ export function formatDateTimeInTimeZone(date: Date, timeZone: string): string {
   return `${value('year')}-${value('month')}-${value('day')} ${value('hour')}:${value('minute')}:${value('second')}`;
 }
 
-export function summarizeAttendance(logs: AttendanceLog[], timeZone: string): DailyAttendanceSummary[] {
-  const byDate = new Map<string, AttendanceLog[]>();
-  for (const log of logs) {
-    const date = localDate(log.occurredAt, timeZone);
-    byDate.set(date, [...(byDate.get(date) ?? []), log]);
-  }
-
-  return [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, dailyLogs]) => {
-    const ordered = dailyLogs.sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+export function summarizeAttendance(days: SummaryDay[]): DailyAttendanceSummary[] {
+  return [...days].sort((left, right) => left.date.localeCompare(right.date)).map((day) => {
     const sessions: AttendanceSession[] = [];
-    const punches: DailyAttendanceSummary['punches'] = [];
-    let workedMinutes = 0;
-    let openSession: AttendanceSession | undefined;
-    let lastExit: Date | undefined;
-    let inferred = false;
-
-    ordered.forEach((log) => {
-      const explicitType = getPunchType(log.punchState);
-      const type = explicitType ?? (openSession ? 'exit' : 'entry');
-      if (!explicitType) inferred = true;
-
-      if (type === 'entry') {
-        openSession = { entry: log.occurredAt };
-        sessions.push(openSession);
-        punches.push({ occurredAt: log.occurredAt, type: 'entry' });
-        return;
-      }
-
-      lastExit = log.occurredAt;
-      punches.push({ occurredAt: log.occurredAt, type: 'exit' });
-      if (!openSession) return;
-
-      openSession.exit = log.occurredAt;
-      openSession.workedMinutes = Math.round((log.occurredAt.getTime() - openSession.entry.getTime()) / 60_000);
-      workedMinutes += openSession.workedMinutes;
-      openSession = undefined;
-    });
-
+    const session = (entry: string | undefined, exit: string | undefined) => {
+      if (!entry) return;
+      sessions.push({ entry: new Date(entry), exit: exit ? new Date(exit) : undefined,
+        workedMinutes: exit ? Math.round((Date.parse(exit) - Date.parse(entry)) / 60_000) : undefined });
+    };
+    session(day.entry, day.mealDeparture ?? (day.workedMinutes !== undefined ? day.exit : undefined));
+    session(day.mealReturn, day.exit);
+    const lastSession = sessions.at(-1);
+    const open = !day.exit && !lastSession?.exit ? lastSession?.entry : undefined;
     return {
-      date,
-      firstEntry: sessions[0]?.entry,
-      lastExit,
-      openEntry: openSession?.entry,
-      workedMinutes,
-      sessions,
-      punches,
-      inferred
+      date: day.date, firstEntry: day.entry ? new Date(day.entry) : undefined, lastExit: day.exit ? new Date(day.exit) : undefined,
+      openEntry: open, workedMinutes: day.workedMinutes ?? null, sessions, inferred: true,
+      punches: day.punches.map((punch) => ({ occurredAt: new Date(punch.occurredAt), movement: punch.movement,
+        type: punch.movement === 'entry' || punch.movement === 'meal_return' ? 'entry'
+          : punch.movement === 'exit' || punch.movement === 'meal_departure' ? 'exit' : 'unclassified' })),
+      issues: day.issues, missingMovements: day.missingMovements ?? [],
     };
   });
-}
-
-function getPunchType(punchState?: number): 'entry' | 'exit' | undefined {
-  if (punchState === 0 || punchState === 3 || punchState === 4) return 'entry';
-  if (punchState === 1 || punchState === 2 || punchState === 5) return 'exit';
-  return undefined;
 }

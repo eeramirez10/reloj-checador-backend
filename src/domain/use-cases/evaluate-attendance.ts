@@ -2,11 +2,7 @@ import type { EvaluationBranch, EvaluationRepository, SubjectLog } from '../repo
 import type { ReportFilters } from '../dtos/filters.js';
 import { formatDateTimeInTimeZone } from '../entities/attendance-summary.js';
 import { accumulateIncidents, evaluateDay, type CountedIncident, type DailyEvaluation } from '../entities/schedule-evaluator.js';
-
-function effective<T extends { effectiveFrom: string; createdAt?: Date }>(items: T[], date: string): T | undefined {
-  return items.filter((item) => item.effectiveFrom <= date).sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom)
-    || (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0))[0];
-}
+import { effectiveVersion, resolveEmployeeSchedule } from '../entities/employee-scheduling.js';
 
 export class AttendanceEvaluationService {
   constructor(private readonly repository: EvaluationRepository) {}
@@ -35,21 +31,24 @@ export class AttendanceEvaluationService {
       const evaluations: Array<{ id: string; subjectId: string; date: string }> = [];
       for (const group of groups.values()) {
         const first = group.logs[0];
-        const policy = effective(snapshot.policies.filter((item) => item.branchId === group.branch?.id), group.date);
-        const assignment = effective(snapshot.assignments.filter((item) => first.employeeId
+        const policy = effectiveVersion(snapshot.policies.filter((item) => item.branchId === group.branch?.id), group.date);
+        const assignment = effectiveVersion(snapshot.assignments.filter((item) => first.employeeId
           ? item.employeeId === first.employeeId : item.deviceUserId === first.deviceUserId), group.date);
         const assigned = assignment?.scheduleId ? schedules.get(assignment.scheduleId) : undefined;
-        const schedule = assigned && assigned.effectiveFrom <= group.date ? assigned
-          : effective(snapshot.schedules.filter((item) => item.branchId === group.branch?.id && item.isDefault), group.date);
+        const base = effectiveVersion(snapshot.schedules.filter((item) => item.branchId === group.branch?.id && item.isDefault), group.date);
+        const individual = effectiveVersion(snapshot.employeeSchedules.filter((item) => item.employeeId === first.subjectId), group.date);
+        const schedule = resolveEmployeeSchedule(base, assigned && assigned.effectiveFrom <= group.date ? assigned : undefined, individual);
         const zone = group.branch?.timeZone ?? 'America/Mexico_City';
-        const daily: DailyEvaluation = policy && schedule ? evaluateDay(group.date, group.logs, schedule.settings, policy.settings, zone)
+        const daily: DailyEvaluation = schedule ? evaluateDay(group.date, group.logs, schedule.settings, policy?.settings, zone)
           : { date: group.date, status: 'unconfigured', punches: group.logs.map((log) => ({ id: log.id, occurredAt: log.occurredAt.toISOString(), localTime: formatDateTimeInTimeZone(log.occurredAt, zone), movement: 'unclassified' })),
             issues: ['Asigna una sucursal, un horario y reglas vigentes para calcular esta jornada.'], incidents: [] };
         const result = { ...daily, name: first.name, employeeNumber: first.employeeNumber, userIds: [...new Set(group.logs.map((log) => log.userId))],
-          branchName: group.branch?.name, scheduleName: schedule?.name, timeZone: zone, policy: policy?.settings };
+          branchName: group.branch?.name, scheduleName: schedule?.scheduleName, timeZone: zone, policy: policy?.settings,
+          scheduleSource: schedule?.source, scheduleSettings: schedule?.settings, schedulingVersionId: schedule?.versionId,
+          mealConfigured: schedule ? !schedule.settings.mealPending : false, policyConfigured: Boolean(policy) };
         const evaluationId = await session.saveEvaluation({
           subjectId: first.subjectId, employeeId: first.employeeId, deviceUserId: first.employeeId ? null : first.deviceUserId,
-          date: group.date, branchId: group.branch?.id ?? null, scheduleId: schedule?.id ?? null, policyId: policy?.id ?? null, result,
+          date: group.date, branchId: group.branch?.id ?? null, scheduleId: schedule?.scheduleId ?? null, policyId: policy?.id ?? null, result,
         });
         evaluations.push({ id: evaluationId, subjectId: first.subjectId, date: group.date });
         for (const incident of daily.incidents) {

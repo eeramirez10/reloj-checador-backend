@@ -14,6 +14,8 @@ export function registerOrganizationRoutes(app: FastifyInstance, services: Appli
   app.post('/employees/:id/clock-record', employees.assignClock);
   app.get('/employees/:id/history', employees.history);
   app.patch('/employees/:id', employees.update);
+  app.get('/employees/:id/scheduling', employees.scheduling);
+  app.put('/employees/:id/scheduling', employees.saveScheduling);
   app.patch('/users/:id/profile', employees.updateProfile);
   app.get('/branches', organization.branches);
   app.post('/branches', organization.createBranch);

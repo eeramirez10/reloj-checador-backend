@@ -37,9 +37,10 @@ describe('schedule-based attendance', () => {
 
   it('does not treat a final punch as an assumed late lunch return when a punch is missing', () => {
     const result = evaluateDay(date, logs(['08:30', '14:30', '18:00']), schedule, policy, zone, now);
-    expect(result.status).toBe('ambiguous');
+    expect(result.status).toBe('incomplete');
     expect(result.mealReturn).toBeUndefined();
-    expect(result.exit).toBeUndefined();
+    expect(result.exit).toBe(dateAtLocalTime(date, '18:00', zone).toISOString());
+    expect(result.missingMovements).toContain('meal_return');
     expect(result.incidents).toHaveLength(0);
   });
 

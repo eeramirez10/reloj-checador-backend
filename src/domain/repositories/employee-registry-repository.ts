@@ -1,6 +1,7 @@
 import type { UserProfilePatch } from '../entities/personal-profile.js';
+import type { EmployeeScheduleInput } from '../entities/employee-scheduling.js';
 
-export type EmployeeCreation = UserProfilePatch & { branchId: string; position?: string | null };
+export type EmployeeCreation = UserProfilePatch & { branchId: string; position?: string | null; scheduling?: EmployeeScheduleInput };
 export type EmployeeIdentification = UserProfilePatch & { targetEmployeeId?: string; useAsAssignedClock?: boolean };
 export interface RegistryEmployee {
   id: string; branchId: string | null; identificationStatus: string; firstName: string | null;

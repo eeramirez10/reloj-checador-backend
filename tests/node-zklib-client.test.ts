@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import ZKLib from 'node-zklib';
 import type { Device } from '../src/domain/entities/device.js';
 import { createRequire } from 'node:module';
-import { NodeZkLibClient } from '../src/infrastructure/integrations/zkteco/node-zklib-client.js';
+import { DirectNodeZkLibClient as NodeZkLibClient } from '../src/infrastructure/integrations/zkteco/direct-node-zklib-client.js';
 
 const require = createRequire(import.meta.url);
 const { decodeRecordData40 } = require('node-zklib/utils.js') as {

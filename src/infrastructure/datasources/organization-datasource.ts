@@ -4,6 +4,7 @@ import type { AssignmentTargets, Branch, BranchInput, BranchPolicy, WorkSchedule
 import { ConfigurationError } from '../../domain/errors/app-error.js';
 import type { OrganizationDatasource } from '../../domain/datasources/persistence.js';
 import type { ScheduleAssignment } from '../../domain/repositories/organization-repository.js';
+import { PrismaEmployeeSchedulingDatasource } from './employee-scheduling-datasource.js';
 
 const branchFields = `id, name, street, exterior_number AS "exteriorNumber", interior_number AS "interiorNumber",
   neighborhood, postal_code AS "postalCode", city, state, country, phone, email, manager_name AS "managerName",
@@ -58,13 +59,20 @@ export class PrismaOrganizationDatasource implements OrganizationDatasource {
 
   async listSchedules(): Promise<WorkSchedule[]> {
     return (await this.database.query<WorkSchedule>(`SELECT id, branch_id AS "branchId", name, effective_from::text AS "effectiveFrom",
-      is_default AS "isDefault", settings, created_at AS "createdAt" FROM work_schedules ORDER BY effective_from DESC, created_at DESC`)).rows;
+      is_default AS "isDefault", settings, created_at AS "createdAt", superseded_from::text AS "supersededFrom" FROM work_schedules ORDER BY effective_from DESC, created_at DESC`)).rows;
   }
 
   async addSchedule(input: Omit<WorkSchedule, 'id'>): Promise<WorkSchedule> {
-    return (await this.database.query<WorkSchedule>(`INSERT INTO work_schedules (id, branch_id, name, effective_from, is_default, settings)
-      VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, branch_id AS "branchId", name, effective_from::text AS "effectiveFrom", is_default AS "isDefault", settings`,
-    [randomUUID(), input.branchId, input.name, input.effectiveFrom, input.isDefault, JSON.stringify(input.settings)])).rows[0];
+    return this.database.transaction(async (client) => {
+      if (input.isDefault) {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))::text', [`branch-schedule:${input.branchId}`]);
+        await client.query(`UPDATE work_schedules SET superseded_from=LEAST(COALESCE(superseded_from,$2::date),$2::date)
+          WHERE branch_id=$1 AND is_default AND effective_from >= $2::date`, [input.branchId, input.effectiveFrom]);
+      }
+      return (await client.query<WorkSchedule>(`INSERT INTO work_schedules (id, branch_id, name, effective_from, is_default, settings)
+        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, branch_id AS "branchId", name, effective_from::text AS "effectiveFrom", is_default AS "isDefault", settings`,
+      [randomUUID(), input.branchId, input.name, input.effectiveFrom, input.isDefault, JSON.stringify(input.settings)])).rows[0];
+    });
   }
 
   async listAssignments() {
@@ -105,9 +113,22 @@ export class PrismaOrganizationDatasource implements OrganizationDatasource {
         const user = column === 'device_user_id' ? (await client.query<{ employee_id: string | null }>('SELECT employee_id FROM device_users WHERE id = $1', [sourceId])).rows[0] : undefined;
         const targetColumn = user?.employee_id ? 'employee_id' : column;
         const id = user?.employee_id ?? sourceId;
+        const scheduling = new PrismaEmployeeSchedulingDatasource(client);
+        if (targetColumn === 'employee_id') await scheduling.lock(id);
         await client.query(`INSERT INTO schedule_assignments (id, ${targetColumn}, schedule_id, effective_from)
           VALUES ($1,$2,$3,$4) ON CONFLICT (${targetColumn}, effective_from) DO UPDATE SET schedule_id = EXCLUDED.schedule_id`,
         [randomUUID(), id, scheduleId, targets.effectiveFrom]);
+        if (targetColumn === 'employee_id') {
+          const context = await scheduling.context(id, targets.effectiveFrom);
+          const role = scheduleId ? (await client.query<WorkSchedule>(`SELECT id,branch_id AS "branchId",name,effective_from::text AS "effectiveFrom",
+            is_default AS "isDefault",settings FROM work_schedules WHERE id=$1`, [scheduleId])).rows[0] : undefined;
+          await scheduling.append(id, { effectiveFrom: targets.effectiveFrom,
+            workHours: role ? { workDays: role.settings.workDays, entryTime: role.settings.entryTime, exitTime: role.settings.exitTime } : null,
+            meal: role && role.settings.mealMode !== 'individual' ? { enabled: role.settings.mealEnabled, startTime: role.settings.mealStart,
+              endTime: role.settings.mealEnd, durationMinutes: role.settings.mealDurationMinutes } : context.version?.meal ?? null,
+            recognitionMarginMinutes: context.version?.recognitionMarginMinutes ?? role?.settings.recognitionMarginMinutes ?? 30,
+          });
+        }
       }
     }
   }
