@@ -1,0 +1,38 @@
+{
+  "name": "reloj-checador-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "postinstall": "node scripts/patch-zklib.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "migrate": "tsx src/db/migrate.ts",
+    "import:employees": "tsx scripts/import-employee-catalog.ts",
+    "backup:database": "tsx scripts/backup-database.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "@fastify/helmet": "^13.0.1",
+    "@fastify/swagger": "^9.5.1",
+    "@fastify/swagger-ui": "^6.1.1",
+    "dotenv": "^16.6.1",
+    "fastify": "^5.3.2",
+    "node-zklib": "^1.3.0",
+    "pg": "^8.16.3",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.32",
+    "@types/pg": "^8.15.4",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

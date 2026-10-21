@@ -1,0 +1,47 @@
+@baseUrl = http://127.0.0.1:3005
+@deviceId = ffa6b402-8ba2-4bb3-807e-21f84b416713
+
+### Estado del servicio
+GET {{baseUrl}}/health
+
+### Crear SilkBio-100TC (sustituye la IP por la IP fija del reloj)
+POST {{baseUrl}}/devices
+Content-Type: application/json
+
+{
+  "name": "SilkBio-100TC recepción",
+  "ipAddress": "192.168.1.201",
+  "tcpPort": 4370,
+  "driver": "node",
+  "syncIntervalSeconds": 60
+}
+
+### Listar dispositivos
+GET {{baseUrl}}/devices
+
+### Probar comunicación TCP/IP sin descargar ni borrar registros
+POST {{baseUrl}}/devices/{{deviceId}}/test-connection
+
+### Descargar checadas. Esta operación nunca ejecuta borrado en el reloj.
+POST {{baseUrl}}/devices/{{deviceId}}/sync-attendance
+
+### Descargar usuarios, nombres, roles y tarjetas. No descarga contraseñas ni biometría.
+POST {{baseUrl}}/devices/{{deviceId}}/sync-users
+
+### Consultar usuarios sincronizados
+GET {{baseUrl}}/users?deviceId={{deviceId}}&limit=100
+
+### Sincronizar fotos de usuario con el puente SDK de Windows
+POST {{baseUrl}}/devices/{{deviceId}}/sync-user-photos
+
+### Consultar la foto de un usuario
+GET {{baseUrl}}/devices/{{deviceId}}/users/1/photo
+
+### Consultar checadas copiadas a PostgreSQL
+GET {{baseUrl}}/attendance?deviceId={{deviceId}}&limit=100
+
+### Resumen diario de un usuario. Entrada/salida se infieren del orden de checadas.
+GET {{baseUrl}}/users/1/attendance-summary?deviceId={{deviceId}}&timeZone=America/Mexico_City
+
+### Ver historial de sincronizaciones
+GET {{baseUrl}}/sync-runs?deviceId={{deviceId}}
