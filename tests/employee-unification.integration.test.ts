@@ -1,15 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Database } from '../src/db/database.js';
-import { runMigrations } from '../src/db/migrate.js';
-import { EmployeeRepository } from '../src/employees/employee-repository.js';
-import { EmployeeRegistry } from '../src/employees/employee-registry.js';
-import { OrganizationRepository } from '../src/organization/organization-repository.js';
-import { AttendanceEvaluationService } from '../src/attendance/attendance-evaluation-service.js';
-import { dateAtLocalTime, evaluateDay } from '../src/attendance/schedule-evaluator.js';
-import type { PolicySettings, ScheduleSettings } from '../src/organization/schemas.js';
-import { DeviceRepository } from '../src/devices/device-repository.js';
-import { DeviceUserRepository } from '../src/users/device-user-repository.js';
+import { Database } from '../src/infrastructure/database/database.js';
+import { runMigrations } from '../src/infrastructure/database/legacy-migrations.js';
+import { PrismaEmployeeDatasource as EmployeeRepository } from '../src/infrastructure/datasources/employee-datasource.js';
+import type { EmployeeRegistry } from '../src/domain/use-cases/manage-employee-registry.js';
+import { PrismaOrganizationDatasource as OrganizationRepository } from '../src/infrastructure/datasources/organization-datasource.js';
+import type { AttendanceEvaluationService } from '../src/domain/use-cases/evaluate-attendance.js';
+import { dateAtLocalTime, evaluateDay } from '../src/domain/entities/schedule-evaluator.js';
+import type { PolicySettings, ScheduleSettings } from '../src/domain/entities/organization.js';
+import { PrismaDeviceDatasource as DeviceRepository } from '../src/infrastructure/datasources/device-datasource.js';
+import { PrismaDeviceUserDatasource as DeviceUserRepository } from '../src/infrastructure/datasources/device-user-datasource.js';
+import { createAttendanceEvaluation, createEmployeeRegistry } from '../src/main.js';
 
 const connection = process.env.INTEGRATION_DATABASE_URL;
 const integration = connection ? describe : describe.skip;
@@ -78,8 +79,8 @@ integration('lossless employee unification', () => {
     originalRecord = (await database.query('SELECT to_jsonb(u) AS record FROM device_users u WHERE id = $1', [pendingRecordId])).rows[0].record;
     originalEmployee = (await database.query('SELECT to_jsonb(e) AS record FROM employees e WHERE id = $1', [employeeId])).rows[0].record;
     organization = new OrganizationRepository(database);
-    registry = new EmployeeRegistry(database, organization);
-    evaluation = new AttendanceEvaluationService(database, organization);
+    registry = createEmployeeRegistry(database, organization);
+    evaluation = createAttendanceEvaluation(database, organization);
   }, 30000);
 
   afterAll(async () => {
@@ -95,7 +96,7 @@ integration('lossless employee unification', () => {
     expect(pending).toMatchObject({ identificationStatus: 'pending', name: 'Nombre local capturado', firstName: 'Nombre local', lastName: 'Apellido', imss: '00001234567', rfc: 'BBBB000101BBB' });
     expect(pending.employeeNumber).toBeUndefined();
     expect(pending.clockRecords[0]).toMatchObject({ id: pendingRecordId, userId: '501', hasPhoto: true, cardNumber: '000123' });
-    expect((await database.query('SELECT image_data FROM device_user_photos')).rows[0].image_data).toEqual(photoBytes);
+    expect(Buffer.from((await database.query('SELECT image_data FROM device_user_photos')).rows[0].image_data)).toEqual(photoBytes);
     expect((await database.query('SELECT to_jsonb(a) AS record FROM attendance_logs a ORDER BY id')).rows).toEqual(originalLogs);
     const snapshot = (await database.query("SELECT record - 'binding_status' AS record FROM employee_unification_snapshots WHERE source_type='device_user' AND source_id=$1", [pendingRecordId])).rows[0].record;
     expect(snapshot).toEqual(originalRecord);
@@ -120,11 +121,13 @@ integration('lossless employee unification', () => {
     const employee = await new EmployeeRepository(database).findById(employeeId);
     expect(employee).toMatchObject({ name: 'Nombre confirmado', rfc: 'AAAA000101AAA', imss: '00123456789' });
     expect(employee!.clockRecords).toHaveLength(2);
+    const stored = await database.prisma.employees.findUnique({ where: { id: employeeId }, include: { device_users: true } });
+    expect(stored!.device_users).toHaveLength(2);
     expect(employee!.clockRecords.filter((record) => record.bindingStatus === 'active')).toHaveLength(1);
     expect((await new EmployeeRepository(database).findById(pendingRecordId))).toMatchObject({ identificationStatus: 'merged', mergedIntoId: employeeId, imss: '00001234567' });
     const history = await registry.history(employeeId);
     expect(history.merges[0].originalData.source.imss).toBe('00001234567');
-    expect((await database.query('SELECT image_data FROM device_user_photos')).rows[0].image_data).toEqual(photoBytes);
+    expect(Buffer.from((await database.query('SELECT image_data FROM device_user_photos')).rows[0].image_data)).toEqual(photoBytes);
     expect((await database.query('SELECT to_jsonb(a) AS record FROM attendance_logs a ORDER BY id')).rows).toEqual(originalLogs);
     expect((await database.query('SELECT id FROM attendance_deductions WHERE id=$1', [deductionId])).rows).toHaveLength(1);
     expect((await database.query('SELECT COUNT(*)::int AS count FROM attendance_deductions WHERE voided_at IS NULL')).rows[0].count).toBe(1);

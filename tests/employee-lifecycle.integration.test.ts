@@ -1,16 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Database } from '../src/db/database.js';
-import { runMigrations } from '../src/db/migrate.js';
-import { OrganizationRepository } from '../src/organization/organization-repository.js';
-import { branchSchema } from '../src/organization/schemas.js';
-import { EmployeeRegistry } from '../src/employees/employee-registry.js';
-import { EmployeeLifecycle } from '../src/employees/employee-lifecycle.js';
-import { EmployeeRepository } from '../src/employees/employee-repository.js';
-import { EmployeeNameService } from '../src/employees/employee-name-service.js';
-import { DeviceRepository } from '../src/devices/device-repository.js';
-import { DeviceUserRepository } from '../src/users/device-user-repository.js';
-import { buildApp } from '../src/app.js';
+import { Database } from '../src/infrastructure/database/database.js';
+import { runMigrations } from '../src/infrastructure/database/legacy-migrations.js';
+import { PrismaOrganizationDatasource as OrganizationRepository } from '../src/infrastructure/datasources/organization-datasource.js';
+import { branchSchema } from '../src/presentation/validators/organization.js';
+import type { EmployeeRegistry } from '../src/domain/use-cases/manage-employee-registry.js';
+import { EmployeeLifecycle } from '../src/infrastructure/datasources/employee-lifecycle.js';
+import { PrismaEmployeeDatasource as EmployeeRepository } from '../src/infrastructure/datasources/employee-datasource.js';
+import { PrismaDeviceDatasource as DeviceRepository } from '../src/infrastructure/datasources/device-datasource.js';
+import { PrismaDeviceUserDatasource as DeviceUserRepository } from '../src/infrastructure/datasources/device-user-datasource.js';
+import { buildApp, createEmployeeRegistry, createEmployeeNames } from '../src/main.js';
 
 const connection = process.env.INTEGRATION_DATABASE_URL;
 const integration = connection ? describe : describe.skip;
@@ -32,7 +31,7 @@ integration('employee lifecycle and simplified editing', () => {
     database = new Database(url.toString());
     await runMigrations(database);
     organization = new OrganizationRepository(database);
-    registry = new EmployeeRegistry(database, organization);
+    registry = createEmployeeRegistry(database, organization);
     mexicoId = (await organization.saveBranch(branchSchema.parse({ name: 'México' })))!.id;
     cancunId = (await organization.saveBranch(branchSchema.parse({ name: 'Cancún', timeZone: 'America/Cancun' })))!.id;
   }, 30000);
@@ -119,7 +118,7 @@ integration('employee lifecycle and simplified editing', () => {
   it('prefills names once, preserves originals and leaves manually corrected names untouched', async () => {
     await new EmployeeRepository(database).upsert({ employeeNumber: '00009002', normalizedEmployeeNumber: '9002', name: 'ACEVES GONZALEZ MARIA LUISA' });
     const employee = (await new EmployeeRepository(database).list({ limit: 500 })).find((item) => item.employeeNumber === '00009002')!;
-    const names = new EmployeeNameService(database);
+    const names = createEmployeeNames(database);
     await names.populateMissing();
     expect(await new EmployeeRepository(database).findById(employee.id)).toMatchObject({ firstName: 'MARIA LUISA', lastName: 'ACEVES GONZALEZ', originalName: 'ACEVES GONZALEZ MARIA LUISA' });
     await database.transaction((client) => new EmployeeRepository(client).update(employee.id, { firstName: 'María Luisa', lastName: 'Apellidos corregidos' }));

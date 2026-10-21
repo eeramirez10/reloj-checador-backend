@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Device } from '../src/devices/device-repository.js';
-import type { UserPhotoFile } from '../src/integrations/zkteco/photo-bridge-client.js';
-import { UserPhotoSyncService } from '../src/users/user-photo-sync-service.js';
+import type { Device } from '../src/domain/entities/device.js';
+import type { UserPhotoFile } from '../src/domain/datasources/device-client.js';
+import { UserPhotoSyncService } from '../src/domain/use-cases/sync-user-photos.js';
 
 const device: Device = {
   id: 'ffa6b402-8ba2-4bb3-807e-21f84b416713',

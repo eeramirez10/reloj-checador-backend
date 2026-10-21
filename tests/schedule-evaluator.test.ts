@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { accumulateIncidents, dateAtLocalTime, evaluateDay, type CountedIncident } from '../src/attendance/schedule-evaluator.js';
-import { policySettingsSchema, scheduleSettingsSchema, type PolicySettings, type ScheduleSettings } from '../src/organization/schemas.js';
+import { accumulateIncidents, dateAtLocalTime, evaluateDay, type CountedIncident } from '../src/domain/entities/schedule-evaluator.js';
+import { policySettingsSchema, scheduleSettingsSchema, type PolicySettings, type ScheduleSettings } from '../src/presentation/validators/organization.js';
 
 const zone = 'America/Mexico_City';
 const date = '2026-10-26';

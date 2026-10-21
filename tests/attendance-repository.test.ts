@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AttendanceRepository } from '../src/attendance/attendance-repository.js';
+import { PrismaAttendanceDatasource as AttendanceRepository } from '../src/infrastructure/datasources/attendance-datasource.js';
 
 describe('AttendanceRepository', () => {
   it('does not duplicate the same attendance event', async () => {

@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import ZKLib from 'node-zklib';
+import type { Device } from '../src/domain/entities/device.js';
 import { createRequire } from 'node:module';
-import { NodeZkLibClient } from '../src/integrations/zkteco/node-zklib-client.js';
+import { NodeZkLibClient } from '../src/infrastructure/integrations/zkteco/node-zklib-client.js';
 
 const require = createRequire(import.meta.url);
 const { decodeRecordData40 } = require('node-zklib/utils.js') as {
@@ -8,6 +10,28 @@ const { decodeRecordData40 } = require('node-zklib/utils.js') as {
 };
 
 describe('NodeZkLibClient', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+
+  it('normalizes SDK errors that do not extend Error and closes failed connections', async () => {
+    vi.spyOn(ZKLib.prototype, 'createSocket').mockRejectedValue({ err: { code: 'ECONNREFUSED', message: 'Connection refused' }, command: 'CONNECT' });
+    const disconnect = vi.spyOn(ZKLib.prototype, 'disconnect').mockResolvedValue();
+    const client = new NodeZkLibClient(1_000, 5_200);
+    await expect(client.testConnection({ name: 'Reloj', ipAddress: '127.0.0.1', tcpPort: 4370 } as Device))
+      .rejects.toMatchObject({ code: 'EXTERNAL_SERVICE_ERROR', message: expect.stringContaining('Connection refused') });
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+
+  it('times out a stuck SDK operation and still disconnects', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(ZKLib.prototype, 'createSocket').mockResolvedValue();
+    vi.spyOn(ZKLib.prototype, 'getInfo').mockImplementation(() => new Promise(() => {}));
+    const disconnect = vi.spyOn(ZKLib.prototype, 'disconnect').mockResolvedValue();
+    const result = new NodeZkLibClient(1_000, 5_200).testConnection({ name: 'Reloj', ipAddress: '127.0.0.1', tcpPort: 4370 } as Device);
+    const failure = expect(result).rejects.toMatchObject({ code: 'EXTERNAL_SERVICE_TIMEOUT' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await failure;
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
   it('decodes verification and attendance state from TCP records', () => {
     const packet = Buffer.alloc(40);
     packet.writeUInt16LE(15_645, 0);

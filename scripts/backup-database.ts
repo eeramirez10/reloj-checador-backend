@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { env } from '../src/config/env.js';
-import { Database, type Queryable } from '../src/db/database.js';
+import { env } from '../src/infrastructure/config/env.js';
+import { Database, type Queryable } from '../src/infrastructure/database/database.js';
 
 async function inventory(database: Queryable) {
   const tables = (await database.query<{ name: string; identifier: string }>(

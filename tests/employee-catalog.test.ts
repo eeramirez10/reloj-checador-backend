@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeEmployeeNumber, parseEmployeeCatalog } from '../src/employees/employee-catalog.js';
+import { normalizeEmployeeNumber, parseEmployeeCatalog } from '../src/infrastructure/imports/employee-catalog.js';
 
 type Word = [text: string, left: number, top: number, page?: number];
 

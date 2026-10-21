@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PhotoBridgeError, ZktecoPhotoBridgeClient } from '../src/integrations/zkteco/photo-bridge-client.js';
+import { PhotoBridgeError, ZktecoPhotoBridgeClient } from '../src/infrastructure/integrations/zkteco/photo-bridge-client.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -29,6 +29,6 @@ describe('ZktecoPhotoBridgeClient', () => {
     const client = new ZktecoPhotoBridgeClient('http://127.0.0.1:3200');
 
     await expect(client.getUserPhotos({ ipAddress: '192.168.1.199', tcpPort: 4370 } as any, ['1514']))
-      .rejects.toMatchObject({ message: 'SDK -4985: fallo de lectura', statusCode: 502 });
+      .rejects.toMatchObject({ message: 'SDK -4985: fallo de lectura', code: 'EXTERNAL_SERVICE_ERROR' });
   });
 });

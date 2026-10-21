@@ -1,17 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Database } from '../src/db/database.js';
-import { runMigrations } from '../src/db/migrate.js';
-import { OrganizationRepository } from '../src/organization/organization-repository.js';
-import { branchSchema, type PolicySettings, type ScheduleSettings } from '../src/organization/schemas.js';
-import { EmployeeRepository } from '../src/employees/employee-repository.js';
-import { DeviceRepository } from '../src/devices/device-repository.js';
-import { DeviceUserRepository } from '../src/users/device-user-repository.js';
-import { AttendanceRepository } from '../src/attendance/attendance-repository.js';
-import { AttendanceEvaluationService } from '../src/attendance/attendance-evaluation-service.js';
-import { dateAtLocalTime } from '../src/attendance/schedule-evaluator.js';
-import { buildApp } from '../src/app.js';
-import { EmployeeRegistry } from '../src/employees/employee-registry.js';
+import { Database } from '../src/infrastructure/database/database.js';
+import { runMigrations } from '../src/infrastructure/database/legacy-migrations.js';
+import { PrismaOrganizationDatasource as OrganizationRepository } from '../src/infrastructure/datasources/organization-datasource.js';
+import { branchSchema, type PolicySettings, type ScheduleSettings } from '../src/presentation/validators/organization.js';
+import { PrismaEmployeeDatasource as EmployeeRepository } from '../src/infrastructure/datasources/employee-datasource.js';
+import { PrismaDeviceDatasource as DeviceRepository } from '../src/infrastructure/datasources/device-datasource.js';
+import { PrismaDeviceUserDatasource as DeviceUserRepository } from '../src/infrastructure/datasources/device-user-datasource.js';
+import { PrismaAttendanceDatasource as AttendanceRepository } from '../src/infrastructure/datasources/attendance-datasource.js';
+import type { AttendanceEvaluationService } from '../src/domain/use-cases/evaluate-attendance.js';
+import { dateAtLocalTime } from '../src/domain/entities/schedule-evaluator.js';
+import { buildApp, createAttendanceEvaluation, createEmployeeRegistry } from '../src/main.js';
 
 const connection = process.env.INTEGRATION_DATABASE_URL;
 const integration = connection ? describe : describe.skip;
@@ -40,7 +39,7 @@ integration('organization and scheduled attendance in PostgreSQL', () => {
     await runMigrations(database);
     await runMigrations(database);
     organization = new OrganizationRepository(database);
-    evaluation = new AttendanceEvaluationService(database, organization);
+    evaluation = createAttendanceEvaluation(database, organization);
     firstBranchId = (await organization.saveBranch(branchSchema.parse({ name: 'México', street: 'Reforma', exteriorNumber: '10', postalCode: '06000' })))!.id;
     secondBranchId = (await organization.saveBranch(branchSchema.parse({ name: 'Otra sucursal' })))!.id;
     await organization.addPolicy(firstBranchId, { effectiveFrom: '2025-01-01', settings: policy });
@@ -71,7 +70,7 @@ integration('organization and scheduled attendance in PostgreSQL', () => {
     expect((await users.list({ deviceId: extraDevice.id, limit: 500 }))[0].employeeId).not.toBe(employeeId);
     await users.upsert(firstDeviceId, { userId: '01517', raw: {} });
     const alias = (await users.list({ deviceId: firstDeviceId, limit: 500 })).find((item) => item.userId === '01517')!;
-    await new EmployeeRegistry(database, organization).identify(alias.employeeId!, { targetEmployeeId: employeeId });
+    await createEmployeeRegistry(database, organization).identify(alias.employeeId!, { targetEmployeeId: employeeId });
     const repository = new AttendanceRepository(database);
     for (const day of ['2025-10-28', '2025-10-29', '2025-10-30', '2025-11-03']) {
       for (const [index, time] of ['08:31', '15:10', '16:11', '18:00'].entries()) {
@@ -264,7 +263,7 @@ integration('organization and scheduled attendance in PostgreSQL', () => {
       expect((await app.inject({ method: 'PATCH', url: `/users/${user.id}/profile`, payload: { employeeId: null } })).statusCode).toBe(400);
       const original = await new EmployeeRepository(database).findById(user.employeeId!);
       expect(original).toMatchObject({ identificationStatus: 'merged', mergedIntoId: employeeId, firstName: 'Luis', lastName: 'García', imss: '00000000001' });
-      const history = await new EmployeeRegistry(database, organization).history(employeeId);
+      const history = await createEmployeeRegistry(database, organization).history(employeeId);
       expect(history.merges.some((event) => event.originalData.source.imss === '00000000001')).toBe(true);
       expect((await new EmployeeRepository(database).list({ limit: 500 })).find((item) => item.id === employeeId)?.imss).toBe('00123456789');
     } finally { await app.close(); }

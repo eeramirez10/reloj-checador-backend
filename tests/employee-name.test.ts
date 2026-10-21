@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { splitEmployeeName } from '../src/employees/employee-name.js';
+import { splitEmployeeName } from '../src/domain/entities/employee-name.js';
 
 describe('employee name prefill', () => {
   it.each([

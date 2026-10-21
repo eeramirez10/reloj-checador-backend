@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDateTimeInTimeZone, summarizeAttendance } from '../src/attendance/attendance-summary.js';
+import { formatDateTimeInTimeZone, summarizeAttendance } from '../src/domain/entities/attendance-summary.js';
 
 describe('summarizeAttendance', () => {
   it('pairs punches chronologically and leaves an unmatched entry open', () => {

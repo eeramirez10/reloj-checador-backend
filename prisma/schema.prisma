@@ -1,0 +1,363 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/infrastructure/database/generated"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model attendance_deductions {
+  id                   String               @id @db.Uuid
+  subject_id           String               @db.Uuid
+  policy_id            String               @db.Uuid
+  trigger_incident_id  String               @unique @db.Uuid
+  category             String
+  window_start         DateTime             @db.Date
+  window_end           DateTime             @db.Date
+  incident_ids         String[]             @db.Uuid
+  salary_days          Int                  @default(1)
+  voided_at            DateTime?            @db.Timestamptz(6)
+  created_at           DateTime             @default(now()) @db.Timestamptz(6)
+  branch_policies      branch_policies      @relation(fields: [policy_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  attendance_incidents attendance_incidents @relation(fields: [trigger_incident_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model attendance_evaluations {
+  id                   String                 @id @db.Uuid
+  subject_id           String                 @db.Uuid
+  employee_id          String?                @db.Uuid
+  device_user_id       String?                @db.Uuid
+  date                 DateTime               @db.Date
+  branch_id            String?                @db.Uuid
+  schedule_id          String?                @db.Uuid
+  policy_id            String?                @db.Uuid
+  result               Json
+  updated_at           DateTime               @default(now()) @db.Timestamptz(6)
+  active               Boolean                @default(true)
+  branches             branches?              @relation(fields: [branch_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  device_users         device_users?          @relation(fields: [device_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employees            employees?             @relation(fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  branch_policies      branch_policies?       @relation(fields: [policy_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  work_schedules       work_schedules?        @relation(fields: [schedule_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  attendance_incidents attendance_incidents[]
+
+  @@unique([subject_id, date])
+  @@index([branch_id, date], map: "attendance_evaluations_branch_date_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model attendance_incidents {
+  id                     String                 @id @db.Uuid
+  evaluation_id          String                 @db.Uuid
+  subject_id             String                 @db.Uuid
+  policy_id              String                 @db.Uuid
+  log_id                 String                 @db.Uuid
+  kind                   String
+  occurred_at            DateTime               @db.Timestamptz(6)
+  minutes                Int
+  active                 Boolean                @default(true)
+  attendance_deductions  attendance_deductions?
+  attendance_evaluations attendance_evaluations @relation(fields: [evaluation_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  attendance_logs        attendance_logs        @relation(fields: [log_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  branch_policies        branch_policies        @relation(fields: [policy_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([evaluation_id, kind])
+  @@index([subject_id, occurred_at], map: "attendance_incidents_subject_idx")
+}
+
+model attendance_logs {
+  id                   String                 @id @db.Uuid
+  device_id            String                 @db.Uuid
+  event_key            String
+  device_log_id        String?
+  user_id              String
+  verification_type    Int?
+  punch_state          Int?
+  occurred_at          DateTime               @db.Timestamptz(6)
+  raw_data             Json
+  received_at          DateTime               @default(now()) @db.Timestamptz(6)
+  branch_id            String?                @db.Uuid
+  attendance_incidents attendance_incidents[]
+  branches             branches?              @relation(fields: [branch_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  devices              devices                @relation(fields: [device_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([device_id, event_key])
+  @@index([device_id, occurred_at(sort: Desc)], map: "attendance_logs_device_occurred_at_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model branch_assignments {
+  id             String        @id @db.Uuid
+  employee_id    String?       @db.Uuid
+  device_user_id String?       @db.Uuid
+  device_id      String?       @db.Uuid
+  branch_id      String        @db.Uuid
+  effective_from DateTime      @db.Date
+  created_at     DateTime      @default(now()) @db.Timestamptz(6)
+  branches       branches      @relation(fields: [branch_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  devices        devices?      @relation(fields: [device_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  device_users   device_users? @relation(fields: [device_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employees      employees?    @relation(fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([device_id, effective_from], map: "branch_assignments_device_date_idx")
+  @@unique([employee_id, effective_from], map: "branch_assignments_employee_date_idx")
+  @@unique([device_user_id, effective_from], map: "branch_assignments_user_date_idx")
+}
+
+model branch_policies {
+  id                     String                   @id @db.Uuid
+  branch_id              String                   @db.Uuid
+  effective_from         DateTime                 @db.Date
+  settings               Json
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  attendance_deductions  attendance_deductions[]
+  attendance_evaluations attendance_evaluations[]
+  attendance_incidents   attendance_incidents[]
+  branches               branches                 @relation(fields: [branch_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model branches {
+  id                     String                   @id @db.Uuid
+  name                   String
+  street                 String                   @default("")
+  exterior_number        String                   @default("")
+  interior_number        String                   @default("")
+  neighborhood           String                   @default("")
+  postal_code            String                   @default("")
+  city                   String                   @default("")
+  state                  String                   @default("")
+  country                String                   @default("México")
+  phone                  String                   @default("")
+  email                  String                   @default("")
+  manager_name           String                   @default("")
+  time_zone              String                   @default("America/Mexico_City")
+  active                 Boolean                  @default(true)
+  notes                  String                   @default("")
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  attendance_evaluations attendance_evaluations[]
+  attendance_logs        attendance_logs[]
+  branch_assignments     branch_assignments[]
+  branch_policies        branch_policies[]
+  device_users           device_users[]
+  devices                devices[]
+  employees              employees[]
+  work_schedules         work_schedules[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model device_user_photos {
+  device_id      String       @db.Uuid
+  device_user_id String
+  content_type   String
+  image_data     Bytes
+  updated_at     DateTime     @default(now()) @db.Timestamptz(6)
+  device_users   device_users @relation(fields: [device_id, device_user_id], references: [device_id, device_user_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([device_id, device_user_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model device_users {
+  id                                                                                String                   @id @db.Uuid
+  device_id                                                                         String                   @db.Uuid
+  device_user_id                                                                    String
+  uid                                                                               Int?
+  name                                                                              String?
+  role                                                                              Int?
+  card_number                                                                       String?
+  raw_data                                                                          Json
+  synced_at                                                                         DateTime                 @default(now()) @db.Timestamptz(6)
+  branch_id                                                                         String?                  @db.Uuid
+  employee_id                                                                       String                   @unique(map: "device_users_active_employee_idx", where: raw("(binding_status = 'active'::text)")) @db.Uuid
+  display_name                                                                      String?
+  first_name                                                                        String?
+  last_name                                                                         String?
+  rfc                                                                               String?
+  imss                                                                              String?
+  binding_status                                                                    String                   @default("active")
+  attendance_evaluations                                                            attendance_evaluations[]
+  branch_assignments                                                                branch_assignments[]
+  device_user_photos                                                                device_user_photos?
+  branches                                                                          branches?                @relation(fields: [branch_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  devices                                                                           devices                  @relation(fields: [device_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employees                                                                         employees                @relation(fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employee_clock_events_employee_clock_events_device_user_idTodevice_users          employee_clock_events[]  @relation("employee_clock_events_device_user_idTodevice_users")
+  employee_clock_events_employee_clock_events_previous_device_user_idTodevice_users employee_clock_events[]  @relation("employee_clock_events_previous_device_user_idTodevice_users")
+  schedule_assignments                                                              schedule_assignments[]
+
+  @@unique([device_id, device_user_id])
+  @@index([device_id, name], map: "device_users_device_name_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model devices {
+  id                    String               @id @db.Uuid
+  name                  String
+  ip_address            String
+  tcp_port              Int                  @default(4370)
+  driver                String               @default("node")
+  enabled               Boolean              @default(true)
+  sync_interval_seconds Int                  @default(60)
+  created_at            DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime             @default(now()) @db.Timestamptz(6)
+  deleted_at            DateTime?            @db.Timestamptz(6)
+  branch_id             String?              @db.Uuid
+  attendance_logs       attendance_logs[]
+  branch_assignments    branch_assignments[]
+  device_users          device_users[]
+  branches              branches?            @relation(fields: [branch_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sync_runs             sync_runs[]
+
+  @@unique([ip_address, tcp_port], map: "devices_active_endpoint_idx", where: raw("(deleted_at IS NULL)"))
+}
+
+model employee_clock_events {
+  id                                                                       String        @id @db.Uuid
+  employee_id                                                              String        @db.Uuid
+  device_user_id                                                           String        @db.Uuid
+  previous_device_user_id                                                  String?       @db.Uuid
+  reason                                                                   String
+  created_at                                                               DateTime      @default(now()) @db.Timestamptz(6)
+  device_users_employee_clock_events_device_user_idTodevice_users          device_users  @relation("employee_clock_events_device_user_idTodevice_users", fields: [device_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employees                                                                employees     @relation(fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  device_users_employee_clock_events_previous_device_user_idTodevice_users device_users? @relation("employee_clock_events_previous_device_user_idTodevice_users", fields: [previous_device_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model employee_merge_events {
+  id                                                            String    @id @db.Uuid
+  source_employee_id                                            String    @db.Uuid
+  target_employee_id                                            String    @db.Uuid
+  original_data                                                 Json
+  created_at                                                    DateTime  @default(now()) @db.Timestamptz(6)
+  employees_employee_merge_events_source_employee_idToemployees employees @relation("employee_merge_events_source_employee_idToemployees", fields: [source_employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employees_employee_merge_events_target_employee_idToemployees employees @relation("employee_merge_events_target_employee_idToemployees", fields: [target_employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model employee_status_events {
+  id                        String    @id @db.Uuid
+  employee_id               String    @db.Uuid
+  event_type                String
+  previous_is_active        Boolean?
+  is_active                 Boolean
+  local_date                DateTime  @db.Date
+  time_zone                 String
+  previous_termination_date DateTime? @db.Date
+  termination_date          DateTime? @db.Date
+  original_data             Json
+  created_at                DateTime  @default(now()) @db.Timestamptz(6)
+  employees                 employees @relation(fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([employee_id, created_at(sort: Desc)], map: "employee_status_events_employee_date_idx")
+}
+
+model employee_unification_snapshots {
+  id          String   @id @db.Uuid
+  source_type String
+  source_id   String   @db.Uuid
+  record      Json
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([source_type, source_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model employees {
+  id                                                                        String                   @id @db.Uuid
+  employee_number                                                           String?                  @unique
+  normalized_employee_number                                                String?                  @unique
+  name                                                                      String
+  position                                                                  String?
+  rfc                                                                       String?
+  imss                                                                      String?
+  management_code                                                           String?
+  section_code                                                              String?
+  company_code                                                              String?
+  branch_code                                                               String?
+  schedule_type_code                                                        String?
+  hire_date                                                                 DateTime?                @db.Date
+  termination_date                                                          DateTime?                @db.Date
+  created_at                                                                DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at                                                                DateTime                 @default(now()) @db.Timestamptz(6)
+  branch_id                                                                 String?                  @db.Uuid
+  first_name                                                                String?
+  last_name                                                                 String?
+  identification_status                                                     String                   @default("confirmed")
+  merged_into_id                                                            String?                  @db.Uuid
+  is_active                                                                 Boolean                  @default(true)
+  original_name                                                             String?
+  name_split_method                                                         String?
+  attendance_evaluations                                                    attendance_evaluations[]
+  branch_assignments                                                        branch_assignments[]
+  device_users                                                              device_users[]
+  employee_clock_events                                                     employee_clock_events[]
+  employee_merge_events_employee_merge_events_source_employee_idToemployees employee_merge_events[]  @relation("employee_merge_events_source_employee_idToemployees")
+  employee_merge_events_employee_merge_events_target_employee_idToemployees employee_merge_events[]  @relation("employee_merge_events_target_employee_idToemployees")
+  employee_status_events                                                    employee_status_events[]
+  branches                                                                  branches?                @relation(fields: [branch_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employees                                                                 employees?               @relation("employeesToemployees", fields: [merged_into_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  other_employees                                                           employees[]              @relation("employeesToemployees")
+  schedule_assignments                                                      schedule_assignments[]
+
+  @@index([branch_code, name], map: "employees_branch_name_idx")
+  @@index([identification_status])
+}
+
+model organization_initializations {
+  id         String   @id @db.Uuid
+  code       String   @unique
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model schedule_assignments {
+  id             String          @id @db.Uuid
+  employee_id    String?         @db.Uuid
+  device_user_id String?         @db.Uuid
+  schedule_id    String?         @db.Uuid
+  effective_from DateTime        @db.Date
+  created_at     DateTime        @default(now()) @db.Timestamptz(6)
+  device_users   device_users?   @relation(fields: [device_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employees      employees?      @relation(fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  work_schedules work_schedules? @relation(fields: [schedule_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([employee_id, effective_from], map: "schedule_assignments_employee_date_idx")
+  @@unique([device_user_id, effective_from], map: "schedule_assignments_user_date_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model sync_runs {
+  id             String    @id @db.Uuid
+  device_id      String    @db.Uuid
+  status         String
+  started_at     DateTime  @default(now()) @db.Timestamptz(6)
+  completed_at   DateTime? @db.Timestamptz(6)
+  received_count Int       @default(0)
+  inserted_count Int       @default(0)
+  error_message  String?
+  sync_type      String    @default("attendance")
+  devices        devices   @relation(fields: [device_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([device_id, started_at(sort: Desc)], map: "sync_runs_device_started_at_idx")
+}
+
+model work_schedules {
+  id                     String                   @id @db.Uuid
+  branch_id              String                   @db.Uuid
+  name                   String
+  effective_from         DateTime                 @db.Date
+  is_default             Boolean                  @default(false)
+  settings               Json
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  attendance_evaluations attendance_evaluations[]
+  schedule_assignments   schedule_assignments[]
+  branches               branches                 @relation(fields: [branch_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([branch_id, effective_from], map: "work_schedules_branch_date_idx")
+}

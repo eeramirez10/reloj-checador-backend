@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { Database } from '../src/db/database.js';
-import { runMigrations } from '../src/db/migrate.js';
-import { AttendanceRepository } from '../src/attendance/attendance-repository.js';
+import { Database } from '../src/infrastructure/database/database.js';
+import { runMigrations } from '../src/infrastructure/database/legacy-migrations.js';
+import { PrismaAttendanceDatasource as AttendanceRepository } from '../src/infrastructure/datasources/attendance-datasource.js';
 
 const connectionString = process.env.INTEGRATION_DATABASE_URL;
 const integration = connectionString ? describe : describe.skip;

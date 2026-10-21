@@ -9,3 +9,4 @@ backups/
 *.log
 .DS_Store
 /docs/CATALOGO-EMPLEADOS.pdf
+src/infrastructure/database/generated/

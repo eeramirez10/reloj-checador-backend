@@ -1,0 +1,103 @@
+import { randomUUID } from 'node:crypto';
+import type { EvaluationDatasource } from '../../domain/datasources/evaluation-datasource.js';
+import type { EvaluationSession, EvaluationSnapshot, EvaluationWrite, SubjectLog } from '../../domain/repositories/evaluation-repository.js';
+import type { CalculatedDeduction, DailyEvaluation } from '../../domain/entities/schedule-evaluator.js';
+import type { BranchPolicy, WorkSchedule } from '../../domain/entities/organization.js';
+import type { ReportFilters } from '../../domain/dtos/filters.js';
+import type { Database, Queryable } from '../database/database.js';
+import type { Prisma } from '../database/generated/client.js';
+
+class PrismaEvaluationSession implements EvaluationSession {
+  constructor(private readonly database: Queryable) {}
+
+  async snapshot(): Promise<EvaluationSnapshot> {
+    const branches = (await this.database.query<EvaluationSnapshot['branches'][number]>('SELECT id, name, time_zone AS "timeZone" FROM branches')).rows;
+    const policies = (await this.database.query<BranchPolicy>('SELECT id, branch_id AS "branchId", effective_from::text AS "effectiveFrom", settings, created_at AS "createdAt" FROM branch_policies ORDER BY effective_from DESC, created_at DESC')).rows;
+    const schedules = (await this.database.query<WorkSchedule>('SELECT id, branch_id AS "branchId", name, effective_from::text AS "effectiveFrom", is_default AS "isDefault", settings, created_at AS "createdAt" FROM work_schedules ORDER BY effective_from DESC, created_at DESC')).rows;
+    const assignments = (await this.database.query<EvaluationSnapshot['assignments'][number]>('SELECT employee_id AS "employeeId", device_user_id AS "deviceUserId", schedule_id AS "scheduleId", effective_from::text AS "effectiveFrom" FROM schedule_assignments')).rows;
+    const branchAssignments = (await this.database.query<EvaluationSnapshot['branchAssignments'][number]>('SELECT COALESCE(employee_id, device_user_id) AS "targetId", branch_id AS "branchId", effective_from::text AS "effectiveFrom" FROM branch_assignments WHERE device_id IS NULL')).rows;
+    const logs = (await this.database.query<SubjectLog>(`SELECT a.id, u.employee_id AS "employeeId", u.id AS "deviceUserId", COALESCE(u.employee_id, u.id) AS "subjectId",
+      COALESCE(e.name, u.display_name, u.name, u.device_user_id) AS name, e.employee_number AS "employeeNumber", u.device_user_id AS "userId",
+      COALESCE(e.branch_id, u.branch_id, a.branch_id) AS "branchId", a.occurred_at AS "occurredAt"
+      FROM attendance_logs a JOIN device_users u ON u.device_id = a.device_id AND u.device_user_id = a.user_id
+      LEFT JOIN employees e ON e.id = u.employee_id
+      WHERE a.occurred_at <= NOW() AND NOT (a.device_log_id IS NULL AND a.raw_data ? 'userSn'
+        AND EXISTS (SELECT 1 FROM attendance_logs newer WHERE newer.device_id = a.device_id AND newer.device_log_id = a.raw_data ->> 'userSn'))
+      ORDER BY a.occurred_at, a.id`)).rows;
+    return { branches, policies, schedules, assignments, branchAssignments, logs };
+  }
+
+  async saveEvaluation(input: EvaluationWrite): Promise<string> {
+    const result = input.result as unknown as Prisma.InputJsonValue;
+    const date = new Date(`${input.date}T00:00:00Z`);
+    const row = await this.database.prisma.attendance_evaluations.upsert({
+      where: { subject_id_date: { subject_id: input.subjectId, date } },
+      create: {
+        id: randomUUID(), subject_id: input.subjectId, employee_id: input.employeeId, device_user_id: input.deviceUserId,
+        date, branch_id: input.branchId, schedule_id: input.scheduleId, policy_id: input.policyId, result,
+      },
+      update: { branch_id: input.branchId, schedule_id: input.scheduleId, policy_id: input.policyId, result, active: true, updated_at: new Date() },
+    });
+    return row.id;
+  }
+
+  async saveIncident(evaluationId: string, subjectId: string, policyId: string, incident: DailyEvaluation['incidents'][number]): Promise<string> {
+    const data = { policy_id: policyId, log_id: incident.logId, occurred_at: new Date(incident.occurredAt), minutes: incident.minutes };
+    return (await this.database.prisma.attendance_incidents.upsert({
+      where: { evaluation_id_kind: { evaluation_id: evaluationId, kind: incident.kind } },
+      create: { id: randomUUID(), evaluation_id: evaluationId, subject_id: subjectId, kind: incident.kind, ...data },
+      update: { ...data, active: true },
+    })).id;
+  }
+
+  async saveDeduction(subjectId: string, deduction: CalculatedDeduction): Promise<string> {
+    const data = {
+      policy_id: deduction.policyId, category: deduction.category, window_start: new Date(`${deduction.windowStart}T00:00:00Z`),
+      window_end: new Date(`${deduction.windowEnd}T00:00:00Z`), incident_ids: deduction.incidentIds,
+    };
+    return (await this.database.prisma.attendance_deductions.upsert({
+      where: { trigger_incident_id: deduction.triggerIncidentId },
+      create: { id: randomUUID(), subject_id: subjectId, trigger_incident_id: deduction.triggerIncidentId, ...data },
+      update: { ...data, voided_at: null },
+    })).id;
+  }
+
+  async reconcile(activeIncidentIds: string[], activeDeductionIds: string[], activeEvaluationIds: string[]): Promise<void> {
+    await this.database.prisma.attendance_incidents.updateMany({ where: { active: true, id: { notIn: activeIncidentIds } }, data: { active: false } });
+    await this.database.prisma.attendance_deductions.updateMany({ where: { voided_at: null, id: { notIn: activeDeductionIds } }, data: { voided_at: new Date() } });
+    await this.database.prisma.attendance_evaluations.updateMany({ where: { id: { notIn: activeEvaluationIds } }, data: { active: false } });
+  }
+
+  async updateCounters(id: string, counters: { arrival: number; meal: number }, deductionDays: number): Promise<void> {
+    await this.database.query('UPDATE attendance_evaluations SET result = result || $2::jsonb WHERE id = $1', [id, JSON.stringify({ counters, deductionDays })]);
+  }
+}
+
+export class PrismaEvaluationDatasource implements EvaluationDatasource {
+  constructor(private readonly database: Database, private readonly refreshBranches: (client: Queryable) => Promise<void>) {}
+
+  transaction<T>(operation: (session: EvaluationSession) => Promise<T>): Promise<T> {
+    return this.database.transaction(async (client) => {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('attendance-evaluation'))::text");
+      await this.refreshBranches(client);
+      return operation(new PrismaEvaluationSession(client));
+    });
+  }
+
+  async report(filters: ReportFilters) {
+    return (await this.database.query(`SELECT id, subject_id AS "subjectId", employee_id AS "employeeId", device_user_id AS "deviceUserId",
+      date::text, branch_id AS "branchId", result FROM attendance_evaluations WHERE active AND date BETWEEN $1::date AND $2::date
+      AND ($3::uuid IS NULL OR branch_id = $3) AND ($4::uuid IS NULL OR subject_id = $4) ORDER BY date DESC, result ->> 'name'`,
+    [filters.from, filters.to, filters.branchId ?? null, filters.subjectId ?? null])).rows;
+  }
+
+  async deductions(filters: ReportFilters) {
+    return (await this.database.query(`SELECT d.id, d.subject_id AS "subjectId", d.category, d.salary_days AS "salaryDays",
+      d.window_start::text AS "windowStart", d.window_end::text AS "windowEnd", d.incident_ids AS "incidentIds", d.voided_at AS "voidedAt",
+      i.occurred_at AS "occurredAt", ev.result ->> 'name' AS name, ev.result ->> 'branchName' AS "branchName", ev.result ->> 'timeZone' AS "timeZone"
+      FROM attendance_deductions d JOIN attendance_incidents i ON i.id = d.trigger_incident_id
+      JOIN attendance_evaluations ev ON ev.id = i.evaluation_id WHERE ev.date BETWEEN $1::date AND $2::date
+      AND ($3::uuid IS NULL OR ev.branch_id = $3) AND ($4::uuid IS NULL OR d.subject_id = $4) ORDER BY i.occurred_at DESC`,
+    [filters.from, filters.to, filters.branchId ?? null, filters.subjectId ?? null])).rows;
+  }
+}

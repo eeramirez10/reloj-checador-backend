@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
-import { env } from '../src/config/env.js';
-import { Database } from '../src/db/database.js';
+import { env } from '../src/infrastructure/config/env.js';
+import { Database } from '../src/infrastructure/database/database.js';
 
 async function main() {
   if (!process.argv[2]) throw new Error('Indica la ruta al manifiesto del respaldo anterior a la unificación.');

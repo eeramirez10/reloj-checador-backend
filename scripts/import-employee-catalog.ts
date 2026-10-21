@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { env } from '../src/config/env.js';
-import { Database } from '../src/db/database.js';
-import { runMigrations } from '../src/db/migrate.js';
-import { parseEmployeeCatalog } from '../src/employees/employee-catalog.js';
-import { EmployeeRepository } from '../src/employees/employee-repository.js';
-import { EmployeeNameService } from '../src/employees/employee-name-service.js';
+import { env } from '../src/infrastructure/config/env.js';
+import { Database } from '../src/infrastructure/database/database.js';
+import { parseEmployeeCatalog } from '../src/infrastructure/imports/employee-catalog.js';
+import { PrismaEmployeeDatasource } from '../src/infrastructure/datasources/employee-datasource.js';
+import { EmployeeRepositoryImpl } from '../src/infrastructure/repositories/persistence-repositories.js';
+import { createEmployeeNames } from '../src/main.js';
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const sourcePath = resolve(process.argv[2] ?? `${scriptDirectory}/../docs/CATALOGO-EMPLEADOS.pdf`);
@@ -29,12 +29,11 @@ const employees = parseEmployeeCatalog(extractPdfText(sourcePath));
 const database = new Database(env.DATABASE_URL);
 
 try {
-  await runMigrations(database);
   await database.transaction(async (client) => {
-    const repository = new EmployeeRepository(client);
+    const repository = new EmployeeRepositoryImpl(new PrismaEmployeeDatasource(client));
     for (const employee of employees) await repository.upsert(employee);
   });
-  await new EmployeeNameService(database).populateMissing();
+  await createEmployeeNames(database).populateMissing();
 
   const summary = await database.query<{ employee_count: string; linked_user_count: string }>(
     `SELECT
