@@ -5,7 +5,7 @@ import { getUpdatedProfileName } from '../../domain/entities/personal-profile.js
 import { EmployeeLifecycle } from './employee-lifecycle.js';
 import type { EmployeeDatasource } from '../../domain/datasources/persistence.js';
 
-type EmployeeRow = {
+export type EmployeeRow = {
   id: string;
   employee_number: string | null;
   normalized_employee_number: string | null;
@@ -38,7 +38,7 @@ type EmployeeRow = {
 
 const statusExpression = `CASE WHEN is_active THEN 'active' ELSE 'inactive' END`;
 
-const selectColumns = `id, employee_number, normalized_employee_number, name, first_name, last_name, position, rfc, imss,
+export const employeeSelectColumns = `id, employee_number, normalized_employee_number, name, first_name, last_name, position, rfc, imss,
   management_code, section_code, company_code, branch_code, schedule_type_code, hire_date::text AS hire_date,
   termination_date::text AS termination_date, ${statusExpression} AS employment_status, created_at, updated_at, branch_id,
   (SELECT name FROM branches WHERE id = employees.branch_id) AS branch_name,
@@ -58,7 +58,7 @@ const selectColumns = `id, employee_number, normalized_employee_number, name, fi
   ) ORDER BY (u.binding_status = 'active') DESC, u.synced_at DESC)
   FROM device_users u JOIN devices d ON d.id = u.device_id WHERE u.employee_id = employees.id), '[]'::jsonb) AS clock_records`;
 
-const mapRow = (row: EmployeeRow): Employee => ({
+export const mapEmployeeRow = (row: EmployeeRow): Employee => ({
   id: row.id,
   employeeNumber: row.employee_number ?? undefined,
   normalizedEmployeeNumber: row.normalized_employee_number ?? undefined,
@@ -93,8 +93,8 @@ export class PrismaEmployeeDatasource implements EmployeeDatasource {
   constructor(private readonly database: Queryable) {}
 
   async findById(id: string): Promise<Employee | undefined> {
-    const row = (await this.database.query<EmployeeRow>(`SELECT ${selectColumns} FROM employees WHERE id = $1`, [id])).rows[0];
-    return row ? mapRow(row) : undefined;
+    const row = (await this.database.query<EmployeeRow>(`SELECT ${employeeSelectColumns} FROM employees WHERE id = $1`, [id])).rows[0];
+    return row ? mapEmployeeRow(row) : undefined;
   }
 
   async update(id: string, fields: Record<string, string | null>, isActive?: boolean): Promise<boolean> {
@@ -163,7 +163,7 @@ export class PrismaEmployeeDatasource implements EmployeeDatasource {
     limit: number;
   }): Promise<Employee[]> {
     const result = await this.database.query<EmployeeRow>(
-      `SELECT ${selectColumns} FROM employees
+      `SELECT ${employeeSelectColumns} FROM employees
        WHERE ($1::text IS NULL OR employee_number ILIKE '%' || $1 || '%'
          OR normalized_employee_number ILIKE '%' || $1 || '%'
          OR name ILIKE '%' || $1 || '%' OR position ILIKE '%' || $1 || '%'
@@ -175,6 +175,6 @@ export class PrismaEmployeeDatasource implements EmployeeDatasource {
        ORDER BY name, employee_number LIMIT $4`,
       [filters.search?.trim() || null, filters.branchCode ?? null, filters.employmentStatus ?? null, filters.limit, filters.identificationStatus ?? null],
     );
-    return result.rows.map(mapRow);
+    return result.rows.map(mapEmployeeRow);
   }
 }

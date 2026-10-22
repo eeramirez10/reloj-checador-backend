@@ -34,6 +34,8 @@ export function registerOrganizationRoutes(app: FastifyInstance, services: Appli
   app.post('/work-schedules/:id/assignments', organization.assignSchedule);
   app.post('/branches/:id/assignments', organization.assignBranch);
   app.get('/attendance/daily', attendance.daily);
+  app.get('/attendance/cards', attendance.cards);
+  app.get('/attendance/cards/export', attendance.exportCards);
   app.get('/attendance/deductions', attendance.deductions);
   app.post('/attendance/recalculate', attendance.recalculate);
 }

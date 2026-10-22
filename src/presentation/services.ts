@@ -15,6 +15,7 @@ import type { UpdateEmployee } from '../domain/use-cases/update-employee.js';
 import type { GetEmployeeScheduling } from '../domain/use-cases/get-employee-scheduling.js';
 import type { GetEmployeeAttendance } from '../domain/use-cases/get-employee-attendance.js';
 import type { BranchConfigurationService } from '../domain/use-cases/manage-branch-configuration.js';
+import type { GetBranchAttendance } from '../domain/use-cases/get-branch-attendance.js';
 
 export interface ApplicationServices {
   devices: DeviceRepository; attendance: AttendanceRepository; syncRuns: SyncRepository;
@@ -24,6 +25,7 @@ export interface ApplicationServices {
   employeeScheduling: GetEmployeeScheduling;
   employeeAttendance: GetEmployeeAttendance;
   branchConfiguration: BranchConfigurationService;
+  branchAttendance: GetBranchAttendance;
   syncService: SyncService; userSyncService: UserSyncService; userPhotoSyncService: UserPhotoSyncService;
   defaultDriver: DeviceDriver; checkHealth: () => Promise<void>;
 }

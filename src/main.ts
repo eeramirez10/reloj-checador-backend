@@ -39,6 +39,9 @@ import { PrismaEmployeeAttendanceDatasource } from './infrastructure/datasources
 import { PrismaBranchConfigurationDatasource } from './infrastructure/datasources/branch-configuration-datasource.js';
 import { BranchConfigurationRepositoryImpl } from './infrastructure/repositories/branch-configuration-repository.js';
 import { BranchConfigurationService } from './domain/use-cases/manage-branch-configuration.js';
+import { GetBranchAttendance } from './domain/use-cases/get-branch-attendance.js';
+import { BranchAttendanceRepositoryImpl } from './infrastructure/repositories/branch-attendance-repository.js';
+import { PrismaBranchAttendanceDatasource } from './infrastructure/datasources/branch-attendance-datasource.js';
 
 export function createAttendanceEvaluation(database: Database, organization: PrismaOrganizationDatasource) {
   return new AttendanceEvaluationService(new EvaluationRepositoryImpl(new PrismaEvaluationDatasource(database,
@@ -74,6 +77,7 @@ export async function buildApp(dependencies: AppDependencies = {}) {
     const employeeNames = createEmployeeNames(database);
     const employeeScheduling = new GetEmployeeScheduling(new EmployeeSchedulingRepositoryImpl(new PrismaEmployeeSchedulingDatasource(database)));
     const employeeAttendance = new GetEmployeeAttendance(employees, new EmployeeAttendanceRepositoryImpl(new PrismaEmployeeAttendanceDatasource(database)));
+    const branchAttendance = new GetBranchAttendance(new BranchAttendanceRepositoryImpl(new PrismaBranchAttendanceDatasource(database)));
     const updateEmployee = new UpdateEmployee(new PrismaUnitOfWork(database, (client) => ({
       employees: new EmployeeRepositoryImpl(new PrismaEmployeeDatasource(client)),
       employeeScheduling: new EmployeeSchedulingRepositoryImpl(new PrismaEmployeeSchedulingDatasource(client)),
@@ -86,7 +90,7 @@ export async function buildApp(dependencies: AppDependencies = {}) {
     const userSyncService = new UserSyncService(users, syncRuns, clients, syncService, recalculate);
     const userPhotoSyncService = new UserPhotoSyncService(users, photos, syncRuns, photoBridge, syncService);
     const app = await createHttpServer({
-      devices, attendance, syncRuns, users, photos, employees, organization, profiles, registry, evaluation, updateEmployee, employeeScheduling, employeeAttendance, branchConfiguration,
+      devices, attendance, syncRuns, users, photos, employees, organization, profiles, registry, evaluation, updateEmployee, employeeScheduling, employeeAttendance, branchConfiguration, branchAttendance,
       clients, syncService, userSyncService, userPhotoSyncService, defaultDriver: env.ZK_DRIVER,
       checkHealth: async () => { await database.query('SELECT 1'); },
     }, persistenceError);

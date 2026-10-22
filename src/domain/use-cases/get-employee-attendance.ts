@@ -67,6 +67,17 @@ function summarize(days: EmployeeAttendanceDay[]): EmployeeAttendanceSummary {
   return summary;
 }
 
+export function buildEmployeeAttendanceCard(employee: Employee, history: EmployeeAttendanceHistory,
+  period: AttendancePeriod, now = new Date()): EmployeeAttendanceCard {
+  const evaluations = new Map(history.evaluations.map((day) => [day.date, day]));
+  const days: EmployeeAttendanceDay[] = [];
+  for (let date = period.from; date <= period.to; date = addDays(date, 1)) {
+    days.push(buildDay(date, employee, history, evaluations.get(date), now));
+    if (date === period.to) break;
+  }
+  return { employee, period, days, summary: summarize(days) };
+}
+
 export class GetEmployeeAttendance {
   constructor(private readonly employees: Pick<EmployeeRepository, 'findById'>, private readonly repository: EmployeeAttendanceRepository) {}
 
@@ -74,12 +85,6 @@ export class GetEmployeeAttendance {
     const employee = await this.employees.findById(employeeId);
     if (!employee) throw new NotFoundError('Empleado no encontrado.');
     const history = await this.repository.history(employeeId, period);
-    const evaluations = new Map(history.evaluations.map((day) => [day.date, day]));
-    const days: EmployeeAttendanceDay[] = [];
-    for (let date = period.from; date <= period.to; date = addDays(date, 1)) {
-      days.push(buildDay(date, employee, history, evaluations.get(date), now));
-      if (date === period.to) break;
-    }
-    return { employee, period, days, summary: summarize(days) };
+    return buildEmployeeAttendanceCard(employee, history, period, now);
   }
 }

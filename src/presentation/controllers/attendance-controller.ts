@@ -3,9 +3,13 @@ import { formatDateTimeInTimeZone, summarizeAttendance } from '../../domain/enti
 import type { ApplicationServices } from '../services.js';
 import { attendanceQuerySchema, reportSchema, summaryQuerySchema, userParams } from '../validators/attendance.js';
 import { addDays, type DailyEvaluation } from '../../domain/entities/schedule-evaluator.js';
+import { branchAttendanceExportSchema, branchAttendanceQuerySchema } from '../validators/employee-attendance.js';
 
 export class AttendanceController {
-  constructor(private readonly services: Pick<ApplicationServices, 'attendance' | 'evaluation'>) {}
+  constructor(private readonly services: Pick<ApplicationServices, 'attendance' | 'evaluation' | 'branchAttendance'>) {}
+
+  cards = (request: FastifyRequest) => this.services.branchAttendance.execute(branchAttendanceQuerySchema.parse(request.query));
+  exportCards = (request: FastifyRequest) => this.services.branchAttendance.export(branchAttendanceExportSchema.parse(request.query));
 
   list = async (request: FastifyRequest) => {
     const query = attendanceQuerySchema.parse(request.query);
