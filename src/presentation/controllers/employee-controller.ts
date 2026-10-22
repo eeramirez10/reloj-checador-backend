@@ -7,9 +7,10 @@ import { userProfileSchema } from '../validators/personal-profile.js';
 import { z } from 'zod';
 import { dateSchema } from '../validators/organization.js';
 import { employeeSchedulingSchema } from '../validators/employee-scheduling.js';
+import { employeeAttendanceQuerySchema } from '../validators/employee-attendance.js';
 
 export class EmployeeController {
-  constructor(private readonly services: Pick<ApplicationServices, 'employees' | 'organization' | 'registry' | 'evaluation' | 'updateEmployee' | 'profiles' | 'employeeScheduling'>) {}
+  constructor(private readonly services: Pick<ApplicationServices, 'employees' | 'organization' | 'registry' | 'evaluation' | 'updateEmployee' | 'profiles' | 'employeeScheduling' | 'employeeAttendance'>) {}
 
   list = async (request: FastifyRequest) => {
     await this.services.organization.refreshCurrentBranches();
@@ -40,6 +41,9 @@ export class EmployeeController {
   };
 
   history = (request: FastifyRequest) => this.services.registry.history(idParams.parse(request.params).id);
+
+  attendance = (request: FastifyRequest) => this.services.employeeAttendance.execute(
+    idParams.parse(request.params).id, employeeAttendanceQuerySchema.parse(request.query));
 
   update = async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = idParams.parse(request.params);

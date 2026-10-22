@@ -41,11 +41,12 @@ export class AttendanceEvaluationService {
         const zone = group.branch?.timeZone ?? 'America/Mexico_City';
         const daily: DailyEvaluation = schedule ? evaluateDay(group.date, group.logs, schedule.settings, policy?.settings, zone)
           : { date: group.date, status: 'unconfigured', punches: group.logs.map((log) => ({ id: log.id, occurredAt: log.occurredAt.toISOString(), localTime: formatDateTimeInTimeZone(log.occurredAt, zone), movement: 'unclassified' })),
-            issues: ['Asigna una sucursal, un horario y reglas vigentes para calcular esta jornada.'], incidents: [] };
+            issues: ['Asigna una jornada laboral de sucursal o individual vigente para identificar esta jornada.'], incidents: [] };
         const result = { ...daily, name: first.name, employeeNumber: first.employeeNumber, userIds: [...new Set(group.logs.map((log) => log.userId))],
           branchName: group.branch?.name, scheduleName: schedule?.scheduleName, timeZone: zone, policy: policy?.settings,
           scheduleSource: schedule?.source, scheduleSettings: schedule?.settings, schedulingVersionId: schedule?.versionId,
-          mealConfigured: schedule ? !schedule.settings.mealPending : false, policyConfigured: Boolean(policy) };
+          mealConfigured: schedule ? schedule.settings.mealDetection === 'configured' || schedule.settings.mealDetection === 'disabled' : false,
+          mealDetection: schedule?.settings.mealDetection, policyConfigured: Boolean(policy) };
         const evaluationId = await session.saveEvaluation({
           subjectId: first.subjectId, employeeId: first.employeeId, deviceUserId: first.employeeId ? null : first.deviceUserId,
           date: group.date, branchId: group.branch?.id ?? null, scheduleId: schedule?.scheduleId ?? null, policyId: policy?.id ?? null, result,

@@ -44,7 +44,8 @@ const selectColumns = `id, employee_number, normalized_employee_number, name, fi
   (SELECT name FROM branches WHERE id = employees.branch_id) AS branch_name,
   identification_status, merged_into_id, is_active, original_name, name_split_method,
   (SELECT jsonb_build_object('versionId', v.id, 'effectiveFrom', v.effective_from::text, 'workHours', v.work_hours,
-    'meal', v.meal, 'recognitionMarginMinutes', v.recognition_margin_minutes)
+    'meal', v.meal, 'recognitionMarginMinutes', v.recognition_margin_minutes,
+    'mealMode', COALESCE(v.meal_mode, CASE WHEN v.meal IS NULL THEN 'automatic' ELSE 'individual' END), 'recognitionMarginInherited', v.recognition_margin_inherited)
     FROM employee_schedule_versions v WHERE v.employee_id=employees.id
       AND v.effective_from <= (NOW() AT TIME ZONE COALESCE((SELECT time_zone FROM branches WHERE id=employees.branch_id),'America/Mexico_City'))::date
     ORDER BY v.effective_from DESC,v.created_at DESC,v.id DESC LIMIT 1) AS scheduling,

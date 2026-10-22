@@ -13,6 +13,7 @@ export function registerOrganizationRoutes(app: FastifyInstance, services: Appli
   app.post('/employees/:id/identify', employees.identify);
   app.post('/employees/:id/clock-record', employees.assignClock);
   app.get('/employees/:id/history', employees.history);
+  app.get('/employees/:id/attendance', employees.attendance);
   app.patch('/employees/:id', employees.update);
   app.get('/employees/:id/scheduling', employees.scheduling);
   app.put('/employees/:id/scheduling', employees.saveScheduling);
@@ -21,6 +22,10 @@ export function registerOrganizationRoutes(app: FastifyInstance, services: Appli
   app.post('/branches', organization.createBranch);
   app.put('/branches/:id', organization.updateBranch);
   app.get('/branch-policies', organization.policies);
+  app.get('/branch-configurations', organization.configurations);
+  app.get('/branches/:id/configuration', organization.configuration);
+  app.post('/branches/:id/configuration', organization.saveConfiguration);
+  app.delete('/branches/:id/configuration/versions/:versionId', organization.deleteConfiguration);
   app.post('/branches/:id/policies', organization.createPolicy);
   app.get('/work-schedules', organization.schedules);
   app.post('/work-schedules', organization.createSchedule);

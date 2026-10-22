@@ -6,7 +6,9 @@ export interface MealSettings { enabled: boolean; startTime: string; endTime: st
 export interface EmployeeScheduleSettings {
   workHours: WorkHours | null;
   meal: MealSettings | null;
+  mealMode?: 'inherit' | 'automatic' | 'individual';
   recognitionMarginMinutes: number;
+  recognitionMarginInherited?: boolean;
 }
 export interface EmployeeScheduleInput extends EmployeeScheduleSettings {
   effectiveFrom: string;
@@ -32,8 +34,8 @@ function timeInMinutes(time: string): number {
   return Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
 }
 
-export function effectiveVersion<T extends { effectiveFrom: string; createdAt?: Date; supersededFrom?: string | null }>(items: T[], date: string): T | undefined {
-  return items.filter((item) => item.effectiveFrom <= date && (!item.supersededFrom || date < item.supersededFrom))
+export function effectiveVersion<T extends { effectiveFrom: string; createdAt?: Date; supersededFrom?: string | null; deletedAt?: Date | null }>(items: T[], date: string): T | undefined {
+  return items.filter((item) => !item.deletedAt && item.effectiveFrom <= date && (!item.supersededFrom || date < item.supersededFrom))
     .sort((left, right) => right.effectiveFrom.localeCompare(left.effectiveFrom)
       || (right.createdAt?.getTime() ?? 0) - (left.createdAt?.getTime() ?? 0))[0];
 }
@@ -43,19 +45,21 @@ export function resolveEmployeeSchedule(base: WorkSchedule | undefined, assigned
   const origin = version ? base : assigned ?? base;
   const hours = version?.workHours ?? origin?.settings;
   if (!hours) return undefined;
-  const legacyMeal = origin?.settings;
-  const meal = version ? version.meal : legacyMeal && legacyMeal.mealMode !== 'individual' ? {
-    enabled: legacyMeal.mealEnabled, startTime: legacyMeal.mealStart, endTime: legacyMeal.mealEnd,
-    durationMinutes: legacyMeal.mealDurationMinutes,
-  } : null;
+  const mealMode = version?.mealMode ?? (version ? version.meal ? 'individual' : 'automatic' : 'inherit');
+  const branchMeal = base?.settings.branchMeal;
+  const inheritedMargin = base?.settings.branchMeal ? base.settings.recognitionMarginMinutes : origin?.settings.recognitionMarginMinutes;
+  const meal = mealMode === 'individual' ? version?.meal ?? null : mealMode === 'inherit' && branchMeal && branchMeal.mode !== 'automatic'
+    ? { enabled: branchMeal.mode === 'configured', startTime: branchMeal.startTime, endTime: branchMeal.endTime, durationMinutes: branchMeal.durationMinutes } : null;
   const mealFits = !meal?.enabled || (meal.startTime > hours.entryTime && meal.endTime >= meal.startTime
     && timeInMinutes(meal.endTime) + meal.durationMinutes <= timeInMinutes(hours.exitTime));
+  const mealDetection = !meal ? 'automatic' : !meal.enabled ? 'disabled' : mealFits ? 'configured' : 'invalid';
   return {
     settings: {
       workDays: hours.workDays, entryTime: hours.entryTime, exitTime: hours.exitTime,
-      mealEnabled: Boolean(meal?.enabled && mealFits), mealStart: meal?.startTime ?? '14:00', mealEnd: meal?.endTime ?? '14:00',
-      mealDurationMinutes: meal?.durationMinutes ?? 60, mealPending: !meal || !mealFits,
-      recognitionMarginMinutes: version?.recognitionMarginMinutes ?? origin?.settings.recognitionMarginMinutes ?? 30,
+      mealEnabled: mealDetection === 'configured', mealStart: meal?.startTime ?? '00:00', mealEnd: meal?.endTime ?? '00:00',
+      mealDurationMinutes: meal?.durationMinutes ?? 60, mealPending: mealDetection === 'invalid', mealDetection,
+      recognitionMarginMinutes: version && !version.recognitionMarginInherited ? version.recognitionMarginMinutes : inheritedMargin ?? 30,
+      mealSource: mealMode === 'inherit' ? 'branch' : mealMode === 'individual' ? 'individual' : 'automatic',
     },
     source: version?.workHours ? 'individual' : !version && assigned ? 'legacy' : 'branch',
     scheduleId: origin?.id ?? null, scheduleName: version?.workHours ? 'Horario individual' : origin?.name ?? 'Horario individual',
@@ -64,6 +68,8 @@ export function resolveEmployeeSchedule(base: WorkSchedule | undefined, assigned
 }
 
 export function validateEmployeeScheduling(input: EmployeeScheduleInput, base?: WorkSchedule): void {
+  if ((input.mealMode === 'inherit' || input.mealMode === 'automatic') && input.meal) throw new ConfigurationError('Selecciona una comida individual o utiliza la configuración heredada.');
+  if (input.mealMode === 'individual' && !input.meal) throw new ConfigurationError('Completa la configuración individual de comida.');
   const hours = input.workHours ?? base?.settings;
   if (input.workHours && (input.workHours.entryTime >= input.workHours.exitTime || !input.workHours.workDays.length)) {
     throw new ConfigurationError('La jornada individual debe tener días laborables y una salida posterior a la entrada.');

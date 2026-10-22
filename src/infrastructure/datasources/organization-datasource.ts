@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Database, Queryable } from '../database/database.js';
 import type { AssignmentTargets, Branch, BranchInput, BranchPolicy, WorkSchedule } from '../../domain/entities/organization.js';
+import { workOnlyScheduleSettings } from '../../domain/entities/organization.js';
 import { ConfigurationError } from '../../domain/errors/app-error.js';
 import type { OrganizationDatasource } from '../../domain/datasources/persistence.js';
 import type { ScheduleAssignment } from '../../domain/repositories/organization-repository.js';
@@ -47,31 +48,34 @@ export class PrismaOrganizationDatasource implements OrganizationDatasource {
   }
 
   async listPolicies(): Promise<BranchPolicy[]> {
-    return (await this.database.query<BranchPolicy>(`SELECT id, branch_id AS "branchId", effective_from::text AS "effectiveFrom", settings, created_at AS "createdAt"
-      FROM branch_policies ORDER BY effective_from DESC, created_at DESC`)).rows;
+    return (await this.database.query<BranchPolicy>(`SELECT id, branch_id AS "branchId", effective_from::text AS "effectiveFrom", settings, created_at AS "createdAt", superseded_from::text AS "supersededFrom"
+      FROM branch_policies WHERE deleted_at IS NULL ORDER BY effective_from DESC, created_at DESC`)).rows;
   }
 
   async addPolicy(branchId: string, input: Omit<BranchPolicy, 'id' | 'branchId'>): Promise<BranchPolicy> {
-    return (await this.database.query<BranchPolicy>(`INSERT INTO branch_policies (id, branch_id, effective_from, settings)
-      VALUES ($1, $2, $3, $4) RETURNING id, branch_id AS "branchId", effective_from::text AS "effectiveFrom", settings`,
-    [randomUUID(), branchId, input.effectiveFrom, JSON.stringify(input.settings)])).rows[0];
+    return this.database.transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))::text', [`branch-schedule:${branchId}`]);
+      return (await client.query<BranchPolicy>(`INSERT INTO branch_policies (id, branch_id, effective_from, settings)
+        VALUES ($1, $2, $3, $4) RETURNING id, branch_id AS "branchId", effective_from::text AS "effectiveFrom", settings`,
+      [randomUUID(), branchId, input.effectiveFrom, JSON.stringify(input.settings)])).rows[0];
+    });
   }
 
   async listSchedules(): Promise<WorkSchedule[]> {
     return (await this.database.query<WorkSchedule>(`SELECT id, branch_id AS "branchId", name, effective_from::text AS "effectiveFrom",
-      is_default AS "isDefault", settings, created_at AS "createdAt", superseded_from::text AS "supersededFrom" FROM work_schedules ORDER BY effective_from DESC, created_at DESC`)).rows;
+      is_default AS "isDefault", settings, created_at AS "createdAt", superseded_from::text AS "supersededFrom" FROM work_schedules WHERE deleted_at IS NULL ORDER BY effective_from DESC, created_at DESC`)).rows;
   }
 
   async addSchedule(input: Omit<WorkSchedule, 'id'>): Promise<WorkSchedule> {
     return this.database.transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))::text', [`branch-schedule:${input.branchId}`]);
       if (input.isDefault) {
-        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))::text', [`branch-schedule:${input.branchId}`]);
         await client.query(`UPDATE work_schedules SET superseded_from=LEAST(COALESCE(superseded_from,$2::date),$2::date)
-          WHERE branch_id=$1 AND is_default AND effective_from >= $2::date`, [input.branchId, input.effectiveFrom]);
+          WHERE branch_id=$1 AND is_default AND deleted_at IS NULL AND effective_from >= $2::date`, [input.branchId, input.effectiveFrom]);
       }
       return (await client.query<WorkSchedule>(`INSERT INTO work_schedules (id, branch_id, name, effective_from, is_default, settings)
         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, branch_id AS "branchId", name, effective_from::text AS "effectiveFrom", is_default AS "isDefault", settings`,
-      [randomUUID(), input.branchId, input.name, input.effectiveFrom, input.isDefault, JSON.stringify(input.settings)])).rows[0];
+      [randomUUID(), input.branchId, input.name, input.effectiveFrom, input.isDefault, JSON.stringify(workOnlyScheduleSettings(input.settings))])).rows[0];
     });
   }
 
@@ -104,7 +108,7 @@ export class PrismaOrganizationDatasource implements OrganizationDatasource {
 
   private async saveScheduleTargets(client: Queryable, scheduleId: string | null, targets: AssignmentTargets) {
     if (scheduleId) {
-      const schedule = (await client.query<{ effective_from: string }>('SELECT effective_from::text FROM work_schedules WHERE id = $1', [scheduleId])).rows[0];
+      const schedule = (await client.query<{ effective_from: string }>('SELECT effective_from::text FROM work_schedules WHERE id = $1 AND deleted_at IS NULL FOR SHARE', [scheduleId])).rows[0];
       if (!schedule) throw new ConfigurationError('Horario no encontrado.');
       if (targets.effectiveFrom < schedule.effective_from) throw new ConfigurationError('La asignación no puede iniciar antes de la vigencia del horario.');
     }
@@ -124,8 +128,9 @@ export class PrismaOrganizationDatasource implements OrganizationDatasource {
             is_default AS "isDefault",settings FROM work_schedules WHERE id=$1`, [scheduleId])).rows[0] : undefined;
           await scheduling.append(id, { effectiveFrom: targets.effectiveFrom,
             workHours: role ? { workDays: role.settings.workDays, entryTime: role.settings.entryTime, exitTime: role.settings.exitTime } : null,
-            meal: role && role.settings.mealMode !== 'individual' ? { enabled: role.settings.mealEnabled, startTime: role.settings.mealStart,
-              endTime: role.settings.mealEnd, durationMinutes: role.settings.mealDurationMinutes } : context.version?.meal ?? null,
+            meal: context.version?.meal ?? null,
+            mealMode: context.version?.mealMode ?? 'inherit',
+            recognitionMarginInherited: context.version?.recognitionMarginInherited ?? true,
             recognitionMarginMinutes: context.version?.recognitionMarginMinutes ?? role?.settings.recognitionMarginMinutes ?? 30,
           });
         }

@@ -13,6 +13,8 @@ import type { UserPhotoSyncService } from '../domain/use-cases/sync-user-photos.
 import type { UserSyncService } from '../domain/use-cases/sync-users.js';
 import type { UpdateEmployee } from '../domain/use-cases/update-employee.js';
 import type { GetEmployeeScheduling } from '../domain/use-cases/get-employee-scheduling.js';
+import type { GetEmployeeAttendance } from '../domain/use-cases/get-employee-attendance.js';
+import type { BranchConfigurationService } from '../domain/use-cases/manage-branch-configuration.js';
 
 export interface ApplicationServices {
   devices: DeviceRepository; attendance: AttendanceRepository; syncRuns: SyncRepository;
@@ -20,6 +22,8 @@ export interface ApplicationServices {
   organization: OrganizationRepository; profiles: UserProfileRepository; registry: EmployeeRegistry;
   evaluation: AttendanceEvaluationService; updateEmployee: UpdateEmployee; clients: DeviceClientFactory;
   employeeScheduling: GetEmployeeScheduling;
+  employeeAttendance: GetEmployeeAttendance;
+  branchConfiguration: BranchConfigurationService;
   syncService: SyncService; userSyncService: UserSyncService; userPhotoSyncService: UserPhotoSyncService;
   defaultDriver: DeviceDriver; checkHealth: () => Promise<void>;
 }

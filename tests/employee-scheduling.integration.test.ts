@@ -72,12 +72,16 @@ integration('employee scheduling, inheritance and canonical movements', () => {
     if (admin) { await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.close(); }
   });
 
-  it('starts at the first attendance date with inherited work hours and an unconfigured individual meal', async () => {
+  it('starts at the first attendance date with inherited work hours and automatic meal detection', async () => {
     const view = await scheduling(employeeId);
     expect(view.firstAttendanceDate).toBe(date);
     expect(view.latestVersionId).toBeNull();
-    expect(view.resolved.settings).toMatchObject({ entryTime: '08:30', exitTime: '17:30', mealPending: true, recognitionMarginMinutes: 30 });
-    expect((await daily(employeeId)).result).toMatchObject({ status: 'unconfigured', mealConfigured: false });
+    expect(view.resolved.settings).toMatchObject({ entryTime: '08:30', exitTime: '17:30', mealPending: false, mealDetection: 'automatic', recognitionMarginMinutes: 30 });
+    const day = await daily(employeeId);
+    expect(day.result).toMatchObject({ status: 'complete', mealConfigured: false, mealDetection: 'automatic', mealMinutes: 41, workedMinutes: 493 });
+    expect(day.result.expectedMealReturn).toBeUndefined();
+    expect(day.result.incidents).toEqual([]);
+    expect(day.result.punches.map((punch: { movement: string }) => punch.movement)).toEqual(['entry','meal_departure','meal_return','exit']);
   });
 
   it('atomically saves profile and meal, preserving raw modes while classifying 3039 and its summary', async () => {
@@ -106,6 +110,24 @@ integration('employee scheduling, inheritance and canonical movements', () => {
     expect(day.result).toMatchObject({ status: 'complete', scheduleSource: 'individual' });
     expect(day.result.incidents).toEqual([]);
     expect(day.result.punches.map((punch: { movement: string }) => punch.movement)).toEqual(['entry','meal_departure','meal_return','exit']);
+  });
+
+  it('stores a branch workday without a general meal and preserves individual meals when assigning its role', async () => {
+    const created = await app.inject({ method: 'POST', url: '/work-schedules', payload: { branchId, name: 'Solo jornada',
+      effectiveFrom: '2026-01-01', isDefault: false, settings: { ...baseSettings, mealEnabled: true,
+        mealStart: '12:00', mealEnd: '12:00', mealDurationMinutes: 10 } } });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().settings).toMatchObject({ mealEnabled: false, mealMode: 'individual' });
+    const before = await scheduling(employeeId);
+    const assigned = await app.inject({ method: 'POST', url: '/organization/assignments', payload: {
+      employeeIds: [employeeId], effectiveFrom: date, scheduleId: created.json().id,
+    } });
+    expect(assigned.statusCode).toBe(204);
+    const current = await scheduling(employeeId);
+    expect(current.version.meal).toEqual(before.version.meal);
+    expect((await app.inject({ method: 'PUT', url: `/employees/${employeeId}/scheduling`, payload: {
+      ...input, expectedVersionId: current.latestVersionId,
+    } })).statusCode).toBe(204);
   });
 
   it('inherits a backdated base revision without freezing hours in meal-only employee settings', async () => {
@@ -160,5 +182,22 @@ integration('employee scheduling, inheritance and canonical movements', () => {
     const id = created.json().id;
     expect((await scheduling(id)).history).toHaveLength(1);
     expect((await app.inject({ method: 'GET', url: `/employees/${id}/history` })).json().scheduleEvents).toHaveLength(1);
+  });
+
+  it('can return a configured employee to automatic meals without deleting prior settings or incidents', async () => {
+    const before = await scheduling(employeeId);
+    const incidents = (await database.query('SELECT id FROM attendance_incidents WHERE subject_id=$1 ORDER BY id', [employeeId])).rows;
+    expect((await app.inject({ method: 'PUT', url: `/employees/${employeeId}/scheduling`, payload: {
+      ...input, meal: null, expectedVersionId: before.latestVersionId,
+    } })).statusCode).toBe(204);
+    const after = await scheduling(employeeId);
+    expect(after.history).toHaveLength(before.history.length + 1);
+    expect(after.version.meal).toBeNull();
+    expect(after.resolved.settings.mealDetection).toBe('automatic');
+    expect((await daily(employeeId)).result).toMatchObject({ status: 'complete', mealDetection: 'automatic', mealConfigured: false });
+    expect((await daily(employeeId)).result.expectedMealReturn).toBeUndefined();
+    expect((await database.query('SELECT id FROM attendance_incidents WHERE subject_id=$1 ORDER BY id', [employeeId])).rows).toEqual(incidents);
+    expect((await database.query("SELECT id FROM attendance_incidents WHERE subject_id=$1 AND kind IN ('meal_departure','meal_return') AND active", [employeeId])).rows).toEqual([]);
+    expect((await scheduling(specialId)).resolved.settings.mealDetection).toBe('configured');
   });
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_ENTRY_REPEAT_WINDOW_MINUTES } from '../../domain/entities/organization.js';
 
 export { ConfigurationError } from '../../domain/errors/app-error.js';
 export type { BranchInput, Branch, PolicySettings, BranchPolicy, ScheduleSettings, WorkSchedule, AssignmentTargets } from '../../domain/entities/organization.js';
@@ -31,6 +32,7 @@ export const branchSchema = z.object({
 });
 
 export const policySettingsSchema = z.object({
+  entryRepeatWindowMinutes: z.number().int().min(0).max(120).default(DEFAULT_ENTRY_REPEAT_WINDOW_MINUTES),
   entryToleranceMinutes: z.number().int().min(0).max(120),
   mealToleranceMinutes: z.number().int().min(0).max(120),
   entryAllowedTardies: z.number().int().min(0).max(100),
@@ -44,10 +46,10 @@ export const scheduleSettingsSchema = z.object({
   workDays: z.array(z.number().int().min(1).max(7)).min(1).max(7).refine((days) => new Set(days).size === days.length),
   entryTime: timeSchema,
   exitTime: timeSchema,
-  mealEnabled: z.boolean(),
-  mealStart: timeSchema,
-  mealEnd: timeSchema,
-  mealDurationMinutes: z.number().int().min(1).max(240),
+  mealEnabled: z.boolean().default(false),
+  mealStart: timeSchema.default('00:00'),
+  mealEnd: timeSchema.default('00:00'),
+  mealDurationMinutes: z.number().int().min(1).max(240).default(60),
   mealMode: z.enum(['schedule', 'individual']).optional(),
   recognitionMarginMinutes: z.number().int().min(0).max(120).optional(),
 }).superRefine((value, context) => {

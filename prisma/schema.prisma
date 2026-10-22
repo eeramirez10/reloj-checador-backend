@@ -114,6 +114,9 @@ model branch_policies {
   effective_from         DateTime                 @db.Date
   settings               Json
   created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  configuration_id       String?                  @unique(map: "branch_policies_configuration_id_key") @db.Uuid
+  superseded_from        DateTime?                @db.Date
+  deleted_at             DateTime?                @db.Timestamptz(6)
   attendance_deductions  attendance_deductions[]
   attendance_evaluations attendance_evaluations[]
   attendance_incidents   attendance_incidents[]
@@ -357,6 +360,8 @@ model work_schedules {
   settings               Json
   created_at             DateTime                 @default(now()) @db.Timestamptz(6)
   superseded_from        DateTime?                @db.Date
+  configuration_id       String?                  @unique(map: "work_schedules_configuration_id_key") @db.Uuid
+  deleted_at             DateTime?                @db.Timestamptz(6)
   attendance_evaluations attendance_evaluations[]
   schedule_assignments   schedule_assignments[]
   branches               branches                 @relation(fields: [branch_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -372,6 +377,8 @@ model employee_schedule_versions {
   work_hours                 Json?
   meal                       Json?
   recognition_margin_minutes Int       @default(30)
+  meal_mode                  String?
+  recognition_margin_inherited Boolean @default(false)
   source_assignment_id       String?   @unique @db.Uuid
   source                     String    @default("manual")
   created_at                 DateTime  @default(now()) @db.Timestamptz(6)

@@ -12,5 +12,7 @@ export const mealSettingsSchema = z.object({
 export const employeeSchedulingSchema = z.object({
   effectiveFrom: dateSchema, workHours: workHoursSchema.nullable(), meal: mealSettingsSchema.nullable(),
   recognitionMarginMinutes: z.number().int().min(0).max(120).default(30),
+  mealMode: z.enum(['inherit', 'automatic', 'individual']).optional(),
+  recognitionMarginInherited: z.boolean().optional(),
   expectedVersionId: z.string().uuid().nullable().optional(),
 }).strict();

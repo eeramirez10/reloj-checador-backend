@@ -51,15 +51,27 @@ describe('actual workday entry and exit times', () => {
     expect(result.missingMovements).toContain('exit');
   });
 
-  it('keeps the last meal departure and last meal return separate from work exit', () => {
+  it('uses the last effective punch as work exit on a closed day, even within a meal window', () => {
     const departed = evaluate(['06:46','15:00']);
+    expect(departed.mealDeparture).toBeUndefined();
+    expect(departed.exit).toBe(dateAtLocalTime(date,'15:00',zone).toISOString());
+    expect(departed.missingMovements).toEqual(['meal_departure','meal_return']);
+    const returned = evaluate(['06:46','15:00','16:00']);
+    expect(returned.mealDeparture).toBeDefined();
+    expect(returned.mealReturn).toBeUndefined();
+    expect(returned.exit).toBe(dateAtLocalTime(date,'16:00',zone).toISOString());
+    expect(returned.missingMovements).toEqual(['meal_return']);
+    expect(returned.workedMinutes).toBeUndefined();
+  });
+
+  it('keeps meal movements provisional while a partial workday is still open', () => {
+    const departed = evaluate(['06:46','15:00'], schedule, dateAtLocalTime(date,'15:05',zone));
     expect(departed.mealDeparture).toBeDefined();
     expect(departed.exit).toBeUndefined();
-    expect(departed.missingMovements).toEqual(['meal_return','exit']);
-    const returned = evaluate(['06:46','15:00','16:00']);
+    const returned = evaluate(['06:46','15:00','16:00'], schedule, dateAtLocalTime(date,'16:05',zone));
     expect(returned.mealReturn).toBeDefined();
     expect(returned.exit).toBeUndefined();
-    expect(returned.missingMovements).toEqual(['exit']);
+    expect(returned.status).toBe('in_progress');
   });
 
   it('does not turn an unexpected intermediate punch into an exit during an unfinished workday', () => {

@@ -7,7 +7,9 @@ import { formatDateTimeInTimeZone } from '../../domain/entities/attendance-summa
 import { ConfigurationError, ConflictError } from '../../domain/errors/app-error.js';
 import type { Queryable } from '../database/database.js';
 
-export const scheduleVersionColumns = 'id, employee_id AS "employeeId", effective_from::text AS "effectiveFrom", work_hours AS "workHours", meal, recognition_margin_minutes AS "recognitionMarginMinutes", created_at AS "createdAt", source';
+export const scheduleVersionColumns = `id, employee_id AS "employeeId", effective_from::text AS "effectiveFrom", work_hours AS "workHours", meal,
+  COALESCE(meal_mode, CASE WHEN meal IS NULL THEN 'automatic' ELSE 'individual' END) AS "mealMode",
+  recognition_margin_minutes AS "recognitionMarginMinutes", recognition_margin_inherited AS "recognitionMarginInherited", created_at AS "createdAt", source`;
 const scheduleColumns = 'id, branch_id AS "branchId", name, effective_from::text AS "effectiveFrom", is_default AS "isDefault", settings, created_at AS "createdAt", superseded_from::text AS "supersededFrom"';
 
 export class PrismaEmployeeSchedulingDatasource implements EmployeeSchedulingDatasource {
@@ -31,10 +33,10 @@ export class PrismaEmployeeSchedulingDatasource implements EmployeeSchedulingDat
     const branchHistory = (await this.database.query<{ branchId: string; effectiveFrom: string }>(
       'SELECT branch_id AS "branchId", effective_from::text AS "effectiveFrom" FROM branch_assignments WHERE employee_id=$1', [employeeId])).rows;
     const branchId = branchHistory.length ? effectiveVersion(branchHistory, day)?.branchId : employee.branchId;
-    const schedules = (await this.database.query<WorkSchedule>(`SELECT ${scheduleColumns} FROM work_schedules WHERE branch_id=$1 ORDER BY effective_from DESC,created_at DESC`, [branchId ?? null])).rows;
+    const schedules = (await this.database.query<WorkSchedule>(`SELECT ${scheduleColumns} FROM work_schedules WHERE branch_id=$1 AND deleted_at IS NULL ORDER BY effective_from DESC,created_at DESC`, [branchId ?? null])).rows;
     const assignment = (await this.database.query<{ scheduleId: string | null }>(
       'SELECT schedule_id AS "scheduleId" FROM schedule_assignments WHERE employee_id=$1 AND effective_from <= $2::date ORDER BY effective_from DESC,created_at DESC LIMIT 1', [employeeId, day])).rows[0];
-    const assignedSchedule = assignment?.scheduleId ? (await this.database.query<WorkSchedule>(`SELECT ${scheduleColumns} FROM work_schedules WHERE id=$1`, [assignment.scheduleId])).rows[0] : undefined;
+    const assignedSchedule = assignment?.scheduleId ? (await this.database.query<WorkSchedule>(`SELECT ${scheduleColumns} FROM work_schedules WHERE id=$1 AND deleted_at IS NULL`, [assignment.scheduleId])).rows[0] : undefined;
     const history = (await this.database.query<EmployeeScheduleVersion>(`SELECT ${scheduleVersionColumns} FROM employee_schedule_versions WHERE employee_id=$1 ORDER BY created_at DESC,id DESC`, [employeeId])).rows;
     return { employeeId, date: day, timeZone: employee.timeZone, firstAttendanceDate: employee.firstAttendanceDate,
       baseSchedule: effectiveVersion(schedules.filter((schedule) => schedule.isDefault), day),
@@ -47,8 +49,9 @@ export class PrismaEmployeeSchedulingDatasource implements EmployeeSchedulingDat
     if (input.expectedVersionId !== undefined && input.expectedVersionId !== (latest?.id ?? null)) {
       throw new ConflictError('Otro cambio actualizó el horario del empleado. Actualiza la ficha antes de guardar.');
     }
-    await this.database.query(`INSERT INTO employee_schedule_versions (id,employee_id,effective_from,work_hours,meal,recognition_margin_minutes,created_at)
-      VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,clock_timestamp())`, [randomUUID(), employeeId, input.effectiveFrom,
-      input.workHours ? JSON.stringify(input.workHours) : null, input.meal ? JSON.stringify(input.meal) : null, input.recognitionMarginMinutes]);
+    await this.database.query(`INSERT INTO employee_schedule_versions (id,employee_id,effective_from,work_hours,meal,recognition_margin_minutes,meal_mode,recognition_margin_inherited,created_at)
+      VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,clock_timestamp())`, [randomUUID(), employeeId, input.effectiveFrom,
+      input.workHours ? JSON.stringify(input.workHours) : null, input.meal ? JSON.stringify(input.meal) : null, input.recognitionMarginMinutes,
+      input.mealMode ?? (input.meal ? 'individual' : 'automatic'), input.recognitionMarginInherited ?? false]);
   }
 }

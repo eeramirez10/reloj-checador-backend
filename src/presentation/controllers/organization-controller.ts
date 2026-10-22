@@ -3,14 +3,23 @@ import { NotFoundError } from '../../domain/errors/not-found-error.js';
 import type { ApplicationServices } from '../services.js';
 import { idParams } from '../validators/common.js';
 import { assignmentSchema, branchSchema, branchTargetsSchema, policySchema, scheduleSchema, targetSchema } from '../validators/organization.js';
+import { branchConfigurationSchema, configurationVersionParams, deleteConfigurationSchema } from '../validators/branch-configuration.js';
 
 export class OrganizationController {
-  constructor(private readonly services: Pick<ApplicationServices, 'organization' | 'evaluation'>) {}
+  constructor(private readonly services: Pick<ApplicationServices, 'organization' | 'evaluation' | 'branchConfiguration'>) {}
 
   branches = () => this.services.organization.listBranches();
   policies = () => this.services.organization.listPolicies();
   schedules = () => this.services.organization.listSchedules();
   assignments = () => this.services.organization.listAssignments();
+  configurations = () => this.services.branchConfiguration.list();
+  configuration = (request: FastifyRequest) => this.services.branchConfiguration.find(idParams.parse(request.params).id);
+  saveConfiguration = async (request: FastifyRequest, reply: FastifyReply) => reply.code(201).send(
+    await this.services.branchConfiguration.save(idParams.parse(request.params).id, branchConfigurationSchema.parse(request.body)));
+  deleteConfiguration = (request: FastifyRequest) => {
+    const { id, versionId } = configurationVersionParams.parse(request.params);
+    return this.services.branchConfiguration.remove(id, versionId, deleteConfigurationSchema.parse(request.body ?? {}).expectedVersionId);
+  };
 
   createBranch = async (request: FastifyRequest, reply: FastifyReply) =>
     reply.code(201).send(await this.services.organization.saveBranch(branchSchema.parse(request.body)));

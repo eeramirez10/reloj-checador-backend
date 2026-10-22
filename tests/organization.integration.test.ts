@@ -52,6 +52,13 @@ integration('organization and scheduled attendance in PostgreSQL', () => {
     secondDeviceId = (await devices.create({ name: 'Reloj otra sucursal', ipAddress: '127.0.0.2', branchId: secondBranchId })).id;
     await new DeviceUserRepository(database).upsert(firstDeviceId, { userId: '1517', name: 'Nombre original reloj', raw: {} });
     await new DeviceUserRepository(database).upsert(secondDeviceId, { userId: '1517', name: 'Otra persona', raw: {} });
+    const { app } = await buildApp({ database });
+    try {
+      expect((await app.inject({ method: 'PUT', url: `/employees/${employeeId}/scheduling`, payload: {
+        effectiveFrom: '2025-01-01', workHours: null,
+        meal: { enabled: true, startTime: '14:00', endTime: '15:00', durationMinutes: 60 }, recognitionMarginMinutes: 30,
+      } })).statusCode).toBe(204);
+    } finally { await app.close(); }
   }, 30000);
 
   afterAll(async () => {

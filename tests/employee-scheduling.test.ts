@@ -36,10 +36,11 @@ describe('independent employee scheduling', () => {
     expect(effectiveVersion([old, base], date)?.id).toBe('base');
     expect(effectiveVersion([version, { ...version, id: 'future', effectiveFrom: '2026-11-01' }], date)?.id).toBe('version');
   });
-  it('does not invent a meal time or meal tardies when configuration is pending', () => {
+  it('defaults to automatic detection without inventing a meal time or meal tardies', () => {
     const resolved = resolveEmployeeSchedule(base, undefined, undefined)!;
     const result = evaluateDay(date, [{ id: 'entry', occurredAt: dateAtLocalTime(date,'08:30',zone) }], resolved.settings, policy, zone, now);
-    expect(result.status).toBe('unconfigured');
+    expect(resolved.settings).toMatchObject({ mealDetection: 'automatic', mealPending: false });
+    expect(result.status).toBe('incomplete');
     expect(result.mealDeparture).toBeUndefined();
     expect(result.incidents).toEqual([]);
   });
@@ -79,9 +80,11 @@ describe('schedule-aware state transitions', () => {
     expect(overdue.missingMovements).toEqual(['meal_return']);
     expect(overdue.incidents).toEqual([]);
   });
-  it('identifies a missing work exit after a valid meal return', () => {
+  it('treats the final scan as work exit rather than assuming a meal return on a closed day', () => {
     const result = evaluate(['08:30','15:00','16:00']);
-    expect(result.missingMovements).toEqual(['exit']);
+    expect(result.missingMovements).toEqual(['meal_return']);
+    expect(result.exit).toBe(dateAtLocalTime(date,'16:00',zone).toISOString());
+    expect(result.mealReturn).toBeUndefined();
     expect(result.status).toBe('incomplete');
     expect(result.workedMinutes).toBeUndefined();
   });
@@ -92,12 +95,13 @@ describe('schedule-aware state transitions', () => {
     expect(result.mealMinutes).toBe(1);
     expect(result.punches[2].movement).toBe('meal_return');
   });
-  it('requires review when a lone punch overlaps meal return and work exit windows', () => {
+  it('prioritizes final work exit when the meal return and work exit windows overlap', () => {
     const lateMeal = { ...version, meal: { enabled: true, startTime: '16:00', endTime: '16:00', durationMinutes: 60 } };
     const result = evaluate(['08:30','16:00','17:15'], now, lateMeal);
-    expect(result.status).toBe('ambiguous');
+    expect(result.status).toBe('incomplete');
     expect(result.mealReturn).toBeUndefined();
-    expect(result.exit).toBeUndefined();
+    expect(result.exit).toBe(dateAtLocalTime(date,'17:15',zone).toISOString());
+    expect(result.missingMovements).toEqual(['meal_return']);
     expect(evaluate(['08:30','16:00','17:15','17:30'], now, lateMeal).status).toBe('complete');
   });
   it('classifies older attendance without applying a future tardiness policy', () => {
