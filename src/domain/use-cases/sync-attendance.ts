@@ -22,7 +22,8 @@ export class SyncService {
         const events = await this.clients.getClient(device).getAttendance(device);
         received = events.length;
         await this.onAttendanceUsers?.(device.id, events.map((event) => event.userId));
-        for (const event of events) if (await this.attendance.insertIfNew(device.id, event)) inserted += 1;
+        if (this.attendance.insertBatchIfNew) inserted = await this.attendance.insertBatchIfNew(device.id, events);
+        else for (const event of events) if (await this.attendance.insertIfNew(device.id, event)) inserted += 1;
         await this.onSynced?.();
         return await this.syncRuns.finish(run.id, 'succeeded', { received: events.length, inserted });
       } catch (error) {
@@ -34,7 +35,7 @@ export class SyncService {
   }
 
   async withDeviceLock<T>(device: Device, operation: () => Promise<T>): Promise<T> {
-    if (this.activeDeviceIds.has(device.id)) throw new SyncAlreadyRunningError(`Ya existe una sincronización activa para ${device.name}.`);
+    if (this.activeDeviceIds.has(device.id)) throw new SyncAlreadyRunningError(`El reloj ${device.name} tiene una operación activa. Intenta nuevamente cuando termine.`);
     this.activeDeviceIds.add(device.id);
     try {
       return await operation();

@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { env } from './infrastructure/config/env.js';
 import { Database } from './infrastructure/database/database.js';
 import { PrismaUnitOfWork } from './infrastructure/database/unit-of-work.js';
@@ -10,7 +11,9 @@ import { PrismaDeviceUserPhotoDatasource } from './infrastructure/datasources/de
 import { PrismaEmployeeDatasource } from './infrastructure/datasources/employee-datasource.js';
 import { PrismaOrganizationDatasource } from './infrastructure/datasources/organization-datasource.js';
 import { PrismaUserProfileDatasource } from './infrastructure/datasources/user-profile-datasource.js';
-import { PrismaEvaluationDatasource } from './infrastructure/datasources/evaluation-datasource.js';
+import { PrismaEvaluationDatasource, createEvaluationSession } from './infrastructure/datasources/evaluation-datasource.js';
+import { PrismaLeaveRepository, PrismaLeaveSession } from './infrastructure/repositories/leave-repository.js';
+import { ManageLeave } from './domain/use-cases/manage-leave.js';
 import { PrismaEmployeeRegistryDatasource } from './infrastructure/datasources/employee-registry-datasource.js';
 import { PrismaEmployeeNameDatasource } from './infrastructure/datasources/employee-name-datasource.js';
 import { AttendanceRepositoryImpl, DeviceRepositoryImpl, EmployeeRepositoryImpl, OrganizationRepositoryImpl,
@@ -42,6 +45,31 @@ import { BranchConfigurationService } from './domain/use-cases/manage-branch-con
 import { GetBranchAttendance } from './domain/use-cases/get-branch-attendance.js';
 import { BranchAttendanceRepositoryImpl } from './infrastructure/repositories/branch-attendance-repository.js';
 import { PrismaBranchAttendanceDatasource } from './infrastructure/datasources/branch-attendance-datasource.js';
+import { GetOvertimeReport } from './domain/use-cases/get-overtime-report.js';
+import { ImportAttendanceFile } from './domain/use-cases/import-attendance-file.js';
+import { AttendanceFileRepositoryImpl } from './infrastructure/repositories/attendance-file-repository.js';
+import { PrismaAttendanceFileDatasource } from './infrastructure/datasources/attendance-file-datasource.js';
+import { ManageDeviceClock } from './domain/use-cases/manage-device-clock.js';
+import { DeviceClockRepositoryImpl } from './infrastructure/repositories/device-clock-repository.js';
+import { PrismaDeviceClockDatasource } from './infrastructure/datasources/device-clock-datasource.js';
+import { PrismaDeviceUserRoleRepository } from './infrastructure/repositories/device-user-role-repository.js';
+import { ManageDeviceUserRole } from './domain/use-cases/manage-device-user-role.js';
+import { whatsappConfiguration, type WhatsAppConfiguration } from './infrastructure/config/whatsapp.js';
+import { PrismaWhatsAppRepository } from './infrastructure/repositories/whatsapp-repository.js';
+import { TwilioWhatsAppClient } from './infrastructure/integrations/twilio/twilio-whatsapp-client.js';
+import { TwilioWebhookSignature } from './infrastructure/integrations/twilio/twilio-webhook-signature.js';
+import { WhatsAppWorker } from './infrastructure/jobs/whatsapp-worker.js';
+import { ReceiveWhatsAppMessage } from './domain/use-cases/receive-whatsapp-message.js';
+import { SendWhatsAppMessage } from './domain/use-cases/send-whatsapp-message.js';
+import { UpdateWhatsAppDelivery } from './domain/use-cases/update-whatsapp-delivery.js';
+import { ProcessWhatsAppInbox } from './domain/use-cases/process-whatsapp-inbox.js';
+import { ResolveWhatsAppEmployee } from './domain/use-cases/resolve-whatsapp-employee.js';
+import type { WhatsAppMessageHandler, WhatsAppMessaging } from './domain/datasources/whatsapp-messaging.js';
+import { ManageAuth } from './domain/use-cases/manage-auth.js';
+import { PrismaAuthRepository } from './infrastructure/repositories/auth-repository.js';
+import { ArgonPasswordHasher } from './infrastructure/security/password-hasher.js';
+import { BranchAccessControl } from './infrastructure/security/access-control.js';
+import type { AuthPrincipal } from './domain/entities/auth.js';
 
 export function createAttendanceEvaluation(database: Database, organization: PrismaOrganizationDatasource) {
   return new AttendanceEvaluationService(new EvaluationRepositoryImpl(new PrismaEvaluationDatasource(database,
@@ -57,11 +85,31 @@ export function createEmployeeNames(database: Database) {
   return new EmployeeNameService(new EmployeeNameRepositoryImpl(new PrismaEmployeeNameDatasource(database)));
 }
 
-export interface AppDependencies { database?: Database; clients?: DeviceClientFactory; photoBridge?: PhotoClient }
+export interface AppDependencies {
+  authentication?: { testPrincipal: AuthPrincipal };
+  database?: Database; clients?: DeviceClientFactory; photoBridge?: PhotoClient;
+  whatsapp?: { configuration: WhatsAppConfiguration; messaging?: WhatsAppMessaging; handler?: WhatsAppMessageHandler; now?: () => Date };
+}
 
 export async function buildApp(dependencies: AppDependencies = {}) {
   const database = dependencies.database ?? new Database(env.DATABASE_URL);
   try {
+    const auth = new ManageAuth(new PrismaAuthRepository(database), new ArgonPasswordHasher(), {
+      random: () => randomBytes(32).toString('base64url'), hash: value => createHash('sha256').update(value).digest('hex'),
+    }, env.AUTH_SESSION_HOURS);
+    const access = new BranchAccessControl(database);
+    const whatsappConfig = dependencies.whatsapp?.configuration ?? whatsappConfiguration(env);
+    const whatsappRepository = new PrismaWhatsAppRepository(database);
+    const whatsappNow = dependencies.whatsapp?.now ?? (() => new Date());
+    const whatsapp = whatsappConfig ? {
+      scope: { accountSid: whatsappConfig.accountSid, businessPhone: whatsappConfig.businessPhone },
+      security: new TwilioWebhookSignature(whatsappConfig),
+      receive: new ReceiveWhatsAppMessage(whatsappRepository,whatsappConfig,whatsappNow),
+      send: new SendWhatsAppMessage(whatsappRepository,dependencies.whatsapp?.messaging ?? new TwilioWhatsAppClient(whatsappConfig),whatsappConfig,whatsappConfig.templates,whatsappNow),
+      delivery: new UpdateWhatsAppDelivery(whatsappRepository,whatsappConfig,whatsappNow),
+      inbox: new ProcessWhatsAppInbox(whatsappRepository,whatsappConfig,whatsappConfig.templates,dependencies.whatsapp?.handler,whatsappNow),
+      employees: new ResolveWhatsAppEmployee(whatsappRepository),
+    } : undefined;
     const devices = new DeviceRepositoryImpl(new PrismaDeviceDatasource(database));
     const attendance = new AttendanceRepositoryImpl(new PrismaAttendanceDatasource(database));
     const syncRuns = new SyncRepositoryImpl(new PrismaSyncDatasource(database));
@@ -72,34 +120,47 @@ export async function buildApp(dependencies: AppDependencies = {}) {
     const organization = new OrganizationRepositoryImpl(organizationDatasource);
     const profiles = new UserProfileRepositoryImpl(new PrismaUserProfileDatasource(database));
     const evaluation = createAttendanceEvaluation(database, organizationDatasource);
+    const leave = new ManageLeave(new PrismaLeaveRepository(database, async (client) => {
+      await organizationDatasource.refreshCurrentBranches(client);
+      await evaluation.evaluate(createEvaluationSession(client));
+    },env.PHONE_DEFAULT_COUNTRY), (value) => createHash('sha256').update(value).digest('hex'));
     const branchConfiguration = new BranchConfigurationService(new BranchConfigurationRepositoryImpl(new PrismaBranchConfigurationDatasource(database)), evaluation);
     const registry = createEmployeeRegistry(database, organizationDatasource);
     const employeeNames = createEmployeeNames(database);
     const employeeScheduling = new GetEmployeeScheduling(new EmployeeSchedulingRepositoryImpl(new PrismaEmployeeSchedulingDatasource(database)));
     const employeeAttendance = new GetEmployeeAttendance(employees, new EmployeeAttendanceRepositoryImpl(new PrismaEmployeeAttendanceDatasource(database)));
-    const branchAttendance = new GetBranchAttendance(new BranchAttendanceRepositoryImpl(new PrismaBranchAttendanceDatasource(database)));
+    const branchAttendanceRepository = new BranchAttendanceRepositoryImpl(new PrismaBranchAttendanceDatasource(database));
+    const branchAttendance = new GetBranchAttendance(branchAttendanceRepository);
+    const overtimeReport = new GetOvertimeReport(branchAttendanceRepository);
     const updateEmployee = new UpdateEmployee(new PrismaUnitOfWork(database, (client) => ({
       employees: new EmployeeRepositoryImpl(new PrismaEmployeeDatasource(client)),
       employeeScheduling: new EmployeeSchedulingRepositoryImpl(new PrismaEmployeeSchedulingDatasource(client)),
+      employeeLeave: new PrismaLeaveSession(client, async () => { await evaluation.evaluate(createEvaluationSession(client)); },env.PHONE_DEFAULT_COUNTRY),
     })));
     const clients = dependencies.clients ?? new ZktecoClientFactory();
     const photoBridge = dependencies.photoBridge ?? new ZktecoPhotoBridgeClient(env.ZK_PHOTO_BRIDGE_URL);
     const recalculate = async () => { await employeeNames.populateMissing(); return evaluation.recalculate(); };
+    const attendanceFile = new ImportAttendanceFile(new AttendanceFileRepositoryImpl(new PrismaAttendanceFileDatasource(database)),recalculate);
     const syncService = new SyncService(attendance, syncRuns, clients, recalculate,
       (deviceId, userIds) => users.ensureFromAttendance(deviceId, userIds));
+    const deviceClock = new ManageDeviceClock(new DeviceClockRepositoryImpl(new PrismaDeviceClockDatasource(database)), clients, syncService);
+    const deviceUserRole = new ManageDeviceUserRole(new PrismaDeviceUserRoleRepository(database),clients,syncService);
     const userSyncService = new UserSyncService(users, syncRuns, clients, syncService, recalculate);
     const userPhotoSyncService = new UserPhotoSyncService(users, photos, syncRuns, photoBridge, syncService);
     const app = await createHttpServer({
-      devices, attendance, syncRuns, users, photos, employees, organization, profiles, registry, evaluation, updateEmployee, employeeScheduling, employeeAttendance, branchConfiguration, branchAttendance,
-      clients, syncService, userSyncService, userPhotoSyncService, defaultDriver: env.ZK_DRIVER,
+      auth, access, authentication: { origins: env.AUTH_ALLOWED_ORIGINS, secureCookie: env.AUTH_COOKIE_SECURE, sessionHours: env.AUTH_SESSION_HOURS, ...dependencies.authentication },
+      devices, attendance, syncRuns, users, photos, employees, organization, profiles, registry, evaluation, updateEmployee, employeeScheduling, employeeAttendance, branchConfiguration, branchAttendance, overtimeReport, attendanceFile,
+      clients, syncService, userSyncService, userPhotoSyncService, deviceClock, deviceUserRole, leave, whatsapp, defaultDriver: env.ZK_DRIVER,
       checkHealth: async () => { await database.query('SELECT 1'); },
     }, persistenceError);
     const scheduler = new SyncScheduler(devices, syncService, env.SYNC_INTERVAL_SECONDS, app.log);
+    const whatsappWorker = whatsapp ? new WhatsAppWorker(whatsappRepository,whatsapp.scope,whatsapp.inbox,whatsapp.send,app.log,whatsappNow) : undefined;
     app.addHook('onClose', async () => {
       await scheduler.stop();
+      await whatsappWorker?.stop();
       if (!dependencies.database) await database.close();
     });
-    return { app, database, devices, employees, organization, evaluation, employeeNames, syncService, userSyncService, userPhotoSyncService, scheduler };
+    return { app, database, auth, devices, employees, organization, evaluation, employeeNames, syncService, userSyncService, userPhotoSyncService, scheduler, whatsapp, whatsappWorker };
   } catch (error) {
     if (!dependencies.database) await database.close();
     throw error;

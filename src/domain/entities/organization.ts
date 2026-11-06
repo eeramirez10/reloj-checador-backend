@@ -9,10 +9,18 @@ export interface PolicySettings {
   entryToleranceMinutes: number; mealToleranceMinutes: number; entryAllowedTardies: number; mealAllowedTardies: number;
   accumulationMode: 'first_lateness' | 'calendar_month'; accumulationDays: number;
   entryRepeatWindowMinutes?: number;
+  overtimeEntryMarginMinutes?: number;
+  overtimeExitMarginMinutes?: number;
 }
 export interface BranchPolicy {
   id: string; branchId: string; effectiveFrom: string; settings: PolicySettings; createdAt?: Date;
   configurationId?: string | null; supersededFrom?: string | null; deletedAt?: Date | null;
+}
+
+export function preserveOvertimeMargins(settings: PolicySettings, previous?: PolicySettings): PolicySettings {
+  return { ...settings,
+    overtimeEntryMarginMinutes: settings.overtimeEntryMarginMinutes ?? previous?.overtimeEntryMarginMinutes,
+    overtimeExitMarginMinutes: settings.overtimeExitMarginMinutes ?? previous?.overtimeExitMarginMinutes };
 }
 export interface BranchMealSettings {
   mode: 'automatic' | 'configured' | 'disabled'; startTime: string; endTime: string; durationMinutes: number;

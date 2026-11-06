@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { dateSchema, timeSchema } from './organization.js';
+import { overtimeSettingsSchema } from './overtime.js';
 
 export const workHoursSchema = z.object({
   workDays: z.array(z.number().int().min(1).max(7)).min(1).max(7).refine((days) => new Set(days).size === days.length),
@@ -14,5 +15,6 @@ export const employeeSchedulingSchema = z.object({
   recognitionMarginMinutes: z.number().int().min(0).max(120).default(30),
   mealMode: z.enum(['inherit', 'automatic', 'individual']).optional(),
   recognitionMarginInherited: z.boolean().optional(),
+  overtime: overtimeSettingsSchema.optional(),
   expectedVersionId: z.string().uuid().nullable().optional(),
 }).strict();

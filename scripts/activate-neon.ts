@@ -1,0 +1,26 @@
+import 'dotenv/config';
+import { readFile, writeFile, rename } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
+import { parse } from 'dotenv';
+import { connectionString } from '../src/infrastructure/database/connection-string.js';
+
+const reportPath = process.argv[2];
+if (!reportPath) throw new Error('Indica el informe verificado de la migración.');
+const report = JSON.parse(await readFile(reportPath, 'utf8')) as { verified: boolean; target: { host: string; database: string } };
+const path = resolve('.env');
+const contents = await readFile(path, 'utf8');
+const configuration = parse(contents);
+if (!configuration.NEON_DATABASE_URL || !configuration.DATABASE_URL) throw new Error('Faltan las conexiones de origen o destino.');
+const target = new URL(connectionString(configuration.NEON_DATABASE_URL));
+if (!report.verified || report.target.host !== target.hostname || report.target.database !== target.pathname.slice(1)) throw new Error('El informe no verifica este destino.');
+if ((contents.match(/^DATABASE_URL\s*=/gm) ?? []).length !== 1) throw new Error('Debe existir una única definición de DATABASE_URL.');
+const rollbackPath = resolve('backups', `neon-cutover-${new Date().toISOString().replace(/[:.]/g,'-')}.env`);
+await writeFile(rollbackPath, contents, { mode: 0o600, flag: 'wx' });
+let updated = contents.replace(/^DATABASE_URL\s*=.*$/m, () => `DATABASE_URL=${JSON.stringify(target.toString())}`);
+if (!configuration.LOCAL_DATABASE_URL) updated += `\nLOCAL_DATABASE_URL=${JSON.stringify(configuration.DATABASE_URL)}\n`;
+if (!configuration.PG_CLIENT_IMAGE) updated += 'PG_CLIENT_IMAGE=postgres:18-alpine\n';
+const temporaryPath = `${path}.${randomUUID()}.tmp`;
+await writeFile(temporaryPath, updated, { mode: 0o600, flag: 'wx' });
+await rename(temporaryPath, path);
+console.log(JSON.stringify({ activated: true, host: target.hostname, database: target.pathname.slice(1), rollbackConfiguration: rollbackPath }));

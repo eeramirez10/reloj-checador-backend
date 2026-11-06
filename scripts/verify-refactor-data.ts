@@ -12,7 +12,11 @@ const manifest = JSON.parse(await readFile(path, 'utf8')) as {
 if (!manifest.verifiedRestore) throw new Error('El respaldo debe tener una restauración verificada.');
 
 function identity(table: string, row: RecordData): string {
-  return table === 'device_user_photos' ? `${row.device_id}:${row.device_user_id}` : String(row.id);
+  if (table === 'device_user_photos') return `${row.device_id}:${row.device_user_id}`;
+  if (table === 'auth_account_branches') return `${row.account_id}:${row.branch_id}`;
+  if (table === 'auth_sessions') return String(row.token_hash);
+  if (table === 'employee_leave_profiles') return String(row.employee_id);
+  return String(row.id);
 }
 
 function protectedRecord(table: string, row: RecordData): RecordData {

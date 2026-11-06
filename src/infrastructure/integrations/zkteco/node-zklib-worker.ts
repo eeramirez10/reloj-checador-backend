@@ -1,6 +1,7 @@
 import { errorMessage, ExternalServiceError } from '../../../domain/errors/app-error.js';
 import { DirectNodeZkLibClient } from './direct-node-zklib-client.js';
 import { isWorkerErrorCode, isWorkerRequest, type ZktecoWorkerResponse } from './worker-protocol.js';
+import type { DeviceUserRoleInput } from '../../../domain/entities/device-user-role.js';
 
 function respond(response: ZktecoWorkerResponse): void {
   if (!process.send) process.exit(1);
@@ -15,7 +16,10 @@ function reportFailure(error: unknown): void {
 async function execute(request: unknown): Promise<void> {
   if (!isWorkerRequest(request)) throw new ExternalServiceError('Solicitud inválida para el controlador del reloj.');
   const client = new DirectNodeZkLibClient(request.timeoutMs, request.inPort, request.operationTimeoutMs);
-  const value = await client[request.operation](request.device);
+  const value = request.operation === 'setClockTime' ? await client.setClockTime(request.device, request.localTime)
+    : request.operation === 'getUserRole' ? await client.getUserRole(request.device,request.roleTarget!)
+    : request.operation === 'setUserRole' ? await client.setUserRole(request.device,request.roleTarget as DeviceUserRoleInput)
+    : await client[request.operation](request.device);
   respond({ type: 'success', value });
 }
 

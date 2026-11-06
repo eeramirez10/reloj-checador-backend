@@ -1,4 +1,6 @@
 import type { Device } from '../entities/device.js';
+import type { ClockTimeReading, ClockTimeTarget } from '../entities/device-clock.js';
+import type { DeviceUserRoleInput, DeviceUserRoleResult, DeviceUserRoleSnapshot, DeviceUserRoleTarget } from '../entities/device-user-role.js';
 
 export interface DeviceInfo {
   serialNumber?: string;
@@ -28,6 +30,10 @@ export interface ZktecoDeviceClient {
   testConnection(device: Device): Promise<DeviceInfo>;
   getAttendance(device: Device): Promise<ZktecoAttendanceEvent[]>;
   getUsers(device: Device): Promise<ZktecoUser[]>;
+  getClockTime?(device: Device): Promise<ClockTimeReading>;
+  setClockTime?(device: Device, localTime?: string): Promise<ClockTimeTarget>;
+  getUserRole?(device: Device, target: DeviceUserRoleTarget): Promise<DeviceUserRoleSnapshot>;
+  setUserRole?(device: Device, input: DeviceUserRoleInput): Promise<DeviceUserRoleResult>;
 }
 
 export interface DeviceClientFactory {

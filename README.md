@@ -78,6 +78,7 @@ Comandos de consulta: `npm run prisma:validate`, `npm run prisma:generate` y `np
 - El handler global conserva el formato `{ message }`, normaliza errores de validación/Prisma y registra detalles internos mediante logs estructurados.
 - El SDK ZKTeco se ejecuta en un proceso hijo por operación. Los errores en sus callbacks, rechazos no controlados o cierres inesperados se convierten en errores de sincronización y quedan aislados de la API. La comunicación entre procesos conserva las fechas y referencias originales.
 - `ZK_TIMEOUT_MS` controla la espera de conexión/lectura del SDK (10 segundos por defecto). `ZK_OPERATION_TIMEOUT_MS` limita la operación completa (120 segundos), permitiendo descargas que necesitan varias lecturas. El supervisor espera también el cierre de la conexión y termina los procesos bloqueados. Los puentes HTTP tienen timeout.
+- El establecimiento de conexión tiene además un límite explícito `ZK_TIMEOUT_MS`, porque el timeout del socket del SDK no rechaza por sí solo una conexión TCP sin respuesta. El error conserva nombre, IP y puerto del equipo para distinguir una falta de conectividad de otros errores del protocolo.
 - La instalación aplica un parche idempotente a `node-zklib`: detiene la lectura cuando falla `requestData` y rechaza buffers nulos, cabeceras truncadas y tamaños de transferencia incompletos. Así conserva la causa original del fallo en lugar de generar un `TypeError` secundario.
 - El scheduler evita ciclos superpuestos, registra los fallos por reloj y reintenta en el siguiente periodo. Un fallo al listar dispositivos tampoco deja un rechazo de promesa sin capturar.
 - Las sincronizaciones registran el progreso parcial. Si también falla el registro del error, se conservan ambas causas y se libera el bloqueo del reloj.
@@ -90,11 +91,107 @@ Comandos de consulta: `npm run prisma:validate`, `npm run prisma:generate` y `np
 - Habilite la comunicación standalone y, para la primera validación, use `Comm Key` igual a `0`.
 - Antes de conectar, confirme que la computadora puede alcanzar la IP del reloj.
 
-La ruta `POST /devices/:id/sync-attendance` solo lee y copia registros; no hay rutas ni comandos que borren las checadas del equipo.
+La ruta `POST /devices/:id/sync-attendance` solo lee y copia registros; no hay rutas ni comandos que borren las checadas del equipo. La sincronización es **acumulativa**: una descarga vacía o parcial no retira el historial de PostgreSQL. Checadas, resúmenes y tarjetas siempre consultan esta base, sin necesitar que el reloj conserve sus registros ni consultar el dispositivo para mostrar el historial.
+
+La identidad de una checada nativa incluye el folio, usuario y fecha/hora original (hora local original cuando está disponible). Un folio reutilizado después de vaciar el reloj crea un registro independiente; no reemplaza otro usuario ni otra fecha. Las descargas repetidas no actualizan la fecha, estado, método de verificación, UUID ni datos originales ya guardados. Las identidades anteriores por folio/hash siguen reconociéndose sin reescribirlas. Los cálculos derivados se pueden actualizar, pero no sustituyen las checadas fuente. La conciliación de una marca importada con su original nativo conserva la evidencia del archivo como se describe abajo. La precarga de nombres comparte el bloqueo del recálculo antes de bloquear fichas, evitando interbloqueos entre sincronizaciones simultáneas y actualización de reportes.
 
 Use `POST /devices/:id/sync-users` para copiar el catálogo de usuarios del reloj. Se almacenan el número de usuario, nombre, rol y tarjeta; contraseñas y datos biométricos se descartan. Una vez sincronizados, `GET /attendance` añade `userName` a cada checada cuando existe una coincidencia.
 
 Para un resumen por persona use `GET /users/:userId/attendance-summary?deviceId=:deviceId`. El resumen utiliza la misma clasificación por horarios que Asistencia diaria e indica `inferred: true`. `punchState` se conserva como evidencia del reloj y no decide el movimiento. Las sesiones se forman solo con movimientos reconocidos; `workedMinutes: null` señala que faltan datos para determinar el tiempo trabajado. Incluye `issues` y `missingMovements`. Las respuestas mantienen los valores ISO en UTC y sus campos `*Local`.
+
+## Administrar fecha y hora del reloj
+
+En **Dispositivos → Fecha y hora** se consulta la hora local del equipo, la referencia del servidor convertida a la zona horaria de su sucursal y la diferencia en segundos. La consulta es una medición puntual; **Consultar hora** toma una lectura nueva.
+
+- `GET /devices/:id/clock-time`: lectura del reloj, instante de medición, zona horaria, referencia local y diferencia (positiva si está adelantado).
+- `POST /devices/:id/clock-time/synchronize`: cuerpo vacío `{}`; toma una lectura previa, envía la hora actual y verifica con una nueva lectura. La fecha se calcula dentro del proceso aislado, inmediatamente antes de enviar el comando. No acepta fechas arbitrarias del navegador.
+- `POST /devices/:id/clock-time/manual`: `{ "localTime": "2026-10-28 16:30:00" }`; establece exactamente la fecha/hora local capturada, con segundos y sin sufijos UTC ni conversiones de zona del navegador. Valida calendario y años 2000–2099 antes de comunicarse con el reloj.
+- `GET /devices/:id/clock-time/history`: últimos 20 intentos guardados en PostgreSQL, incluyendo estado, lecturas anterior/posterior, hora enviada y errores.
+
+Disponible para el controlador TCP/IP directo (incluido su transporte UDP de respaldo) en relojes compatibles con `CMD_GET_TIME`/`CMD_SET_TIME`. Requiere una sucursal con zona horaria; México/Querétaro y Cancún usan sus propias referencias. El reloj no almacena una zona horaria: se envía la fecha/hora local correspondiente, sin alterar la configuración de la sucursal. La precisión de verificación es de cinco segundos. La referencia depende de que la hora del servidor sea correcta.
+
+Consultar no cambia la hora ni crea un ajuste. **Sincronizar hora** es una operación manual; no se programa ni se reintenta automáticamente. Los intentos se registran antes de comunicarse con el dispositivo. Un ACK no basta para declarar éxito: si la lectura posterior no coincide o falla, el historial queda como no confirmado, conservando la evidencia disponible. La consulta, el ajuste, las pruebas de conexión y las descargas comparten el bloqueo por reloj dentro de la instancia de la aplicación (409 si está ocupado).
+
+**Ajustar manualmente** permite capturar fecha y hora local en dos campos. La verificación compara la lectura posterior con el valor solicitado más los segundos transcurridos desde el envío, no con la hora del servidor. Por eso un ajuste manual puede quedar verificado aunque difiera de la referencia del servidor; esa diferencia se sigue mostrando como información. El historial conserva `mode` (`server`/`manual`) y `requestedLocalTime`, incluso si falla la primera conexión. La migración `20261028190000_manual_device_clock` agrega esos datos y clasifica los intentos anteriores como ajustes desde el servidor sin modificar su evidencia.
+
+La migración aditiva `20261028180000_device_clock_adjustments` crea el historial. Ajustar la hora no descarga ni borra checadas, no reinterpreta registros históricos y no modifica identidades, fotos, horarios o descuentos.
+
+## Administradores individuales del reloj
+
+**Empleados → Opciones → Editar → Reloj** permite consultar y aplicar el rol del usuario activo asignado a la ficha. Se admiten **Usuario normal (0)** y **Administrador (14)**; una sucursal y un reloj pueden tener varios administradores. La validación del último administrador se hace contra el catálogo completo del equipo, no contra una cuenta global de la sucursal ni contra datos cacheados.
+
+- `GET /employees/:id/clock-role?clockRecordId=UUID`: lectura manual del equipo; devuelve `clockRecordId` y `snapshot` con ID, UID, rol, administradores, usuarios totales y fecha de medición. El vínculo debe pertenecer a esa ficha, estar activo e identificado. La observación actualiza únicamente la metadata del rol.
+- `POST /employees/:id/clock-role`: `{ clockRecordId, uid, expectedRole, role: 0 | 14 }`. Registra el intento antes de conectar; vuelve a comprobar identidad y rol en el equipo, bloquea quitar el último administrador y verifica el resultado. Devuelve el intento con `status: succeeded | blocked | failed | unconfirmed`, `code`, lecturas anterior/posterior y error. Un HTTP 200 significa que el intento quedó registrado; solo `succeeded` acredita el cambio verificado.
+- `GET /employees/:id/clock-role/history`: últimos veinte intentos del empleado, con referencia al reloj y registro de usuario originales, incluso si después cambia de equipo.
+
+La operación comparte el bloqueo por reloj de sincronización, usuarios, fotos y hora. El controlador ejecuta en el proceso aislado una lectura binaria completa, determina el formato por tamaño y número de usuarios y admite registros de 28/72 bytes. Cambia únicamente el byte de rol mediante `CMD_USER_WRQ (8)`, refresca con `CMD_REFRESHDATA (1013)` y vuelve a leer. Verifica el registro completo y los demás usuarios; contraseñas, tarjeta, nombre, grupo y bytes reservados se conservan en memoria. Los buffers completos y contraseñas no salen del worker ni se guardan en auditoría o logs. Huellas/rostros y checadas no forman parte de la escritura.
+
+Un catálogo parcial, formato desconocido, identidad diferente o rol desactualizado impide escribir. Un ACK sin lectura posterior coincidente no acredita éxito. Ante pérdida de conexión o terminación del worker, el resultado queda sin confirmar y no hay reintento automático: consultar el equipo antes de otra operación. El registro almacenado solo cambia después de una lectura válida o cambio verificado; una inconsistencia de vínculo detectada al guardar se registra como no confirmada.
+
+La migración aditiva `20261031010000_device_user_roles` agrega el historial `device_user_role_changes` y `device_users.role_observed_at`. La fecha de consulta del rol es independiente de `synced_at`, que conserva la fecha de sincronización completa del usuario. El cambio del reloj es una acción inmediata, independiente de la transacción Guardar del resto de pestañas.
+
+`tests/device-user-role-protocol.test.ts` usa equipos TCP/UDP simulados con el worker real para comprobar lectura/escritura, conservación byte por byte, múltiples administradores, bloqueo del último, respuestas rechazadas y resultados no verificados. `tests/device-user-role.integration.test.ts` verifica auditoría, cache, identidad y bloqueo de concurrencia en PostgreSQL. La compatibilidad y el resultado en un equipo físico deben comprobarse desde la interfaz con una consulta nueva y su verificación posterior.
+
+## Corregir vínculos con tarjetas de nómina
+
+El número de empleado de nómina y el ID del usuario en el reloj son referencias independientes. En el Excel `Empleados_Tarjeta_Asistencia.xlsx`, **NÚMERO DE TARJETA** identifica al usuario del reloj, no al empleado de nómina ni al campo RFID `card_number` del dispositivo.
+
+```bash
+npm run import:employee-cards -- "/ruta/Empleados_Tarjeta_Asistencia.xlsx"
+npm run import:employee-cards -- "/ruta/Empleados_Tarjeta_Asistencia.xlsx" --device-override 1545,3077=UUID-del-reloj
+# Después de respaldar y revisar la conciliación:
+npm run import:employee-cards -- "/ruta/Empleados_Tarjeta_Asistencia.xlsx" --device-override 1545,3077=UUID-del-reloj --apply
+```
+
+Requiere Python 3 (biblioteca estándar). Por defecto solo compara; `--apply` guarda el lote completo y recalcula el historial. Si un ID existe en varios relojes, exige elegir el dispositivo explícitamente; no deduce la sucursal por el prefijo del número. Las permutaciones entre fichas confirmadas se aplican atómicamente sin fusionarlas. Las fichas pendientes reemplazadas se archivan con el mecanismo de identificación existente. Solo se corrigen adscripciones iniciales erróneas con vigencia `1900-01-01`; un historial de traslados requiere conciliación individual.
+
+La tabla `employee_clock_binding_imports` conserva hash del archivo, filas, vínculos y datos anteriores. Se mantienen UUID de fichas, registros del reloj, fotografías y checadas originales; el recálculo conserva las evaluaciones/incidencias/descuentos anteriores y desactiva los que dejan de corresponder. Repetir la conciliación no duplica vínculos ni auditorías. La sincronización de usuarios respeta el empleado ya vinculado.
+
+`PG_CONTAINER=reloj-checador-postgres-1 npm run verify:employee-cards -- backups/manifiesto.json UUID-de-conciliacion` restaura el respaldo en una base temporal y verifica todos los registros anteriores, permitiendo exclusivamente los cambios de identidad documentados y la actualización de cálculos derivados. Comprueba además los vínculos del archivo y la integridad de relaciones.
+
+## Importar archivos Talavie
+
+En **Checadas → Importar archivo**, selecciona sucursal, reloj y un `.txt` UTF-8/ASCII (hasta 1 MB y 10 000 líneas). **Revisar archivo** ejecuta una vista previa de solo lectura; **Importar checadas** guarda únicamente las nuevas y recalcula asistencia, retardos y extras. Si todas ya existen, **Registrar archivo sin duplicar** conserva la evidencia de la carga sin crear checadas. El historial muestra las últimas 20 cargas del reloj.
+
+- `POST /attendance/imports/preview`: JSON `{ branchId, deviceId, fileName, content }`; devuelve filas, conteos, zona horaria y `token`.
+- `POST /attendance/imports`: mismo contenido y `expectedToken`; guarda en una transacción y devuelve referencia, `insertedCount`, `alreadyImported` y `recalculated`. Un cambio posterior a la vista previa devuelve 409 para volver a revisar. Si falla solo el recálculo, la respuesta indica que los datos quedaron guardados y permite reintentarlo.
+- `GET /attendance/imports?deviceId=UUID`: últimas cargas, nombres, fechas y conteos, sin devolver todo el contenido.
+
+El registro `01 | 0000603 | 00000 | 15-10-26 | 001 | 1802 | B` corresponde al usuario 603 el 15/10/2026 a las 18:02 locales. El año de dos dígitos se interpreta como 2000–2099. Se conservan los bloques y la letra; B/E no deciden movimientos ni se utilizan como identidad de sucursal. La asociación usa reloj e ID del usuario, incluyendo sus vínculos históricos. Los IDs desconocidos se vinculan mediante las reglas existentes de identidad o quedan pendientes. Las líneas vacías se omiten; se soportan BOM UTF-8 y finales LF/CRLF/CR, conservando el texto original completo.
+
+El archivo tiene precisión de minutos. Una coincidencia única del mismo reloj/usuario/minuto se marca existente, conservando segundos, UUID y datos nativos. Varias marcas nativas en ese minuto quedan ambiguas y no se fusionan. Las repeticiones dentro del archivo y las líneas inválidas se señalan con su número y no crean registros. Cambios de sucursal históricos del reloj incompatibles con la carga se señalan por fila.
+
+La tabla aditiva `attendance_file_imports` conserva texto, hash SHA-256, nombre y resultado completo de la carga, incluso filas omitidas. Repetir un mismo archivo para el mismo reloj es idempotente; archivos superpuestos también se comparan por minuto. Un bloqueo transaccional por reloj coordina cargas y descargas nativas. Si el reloj descarga posteriormente una marca importada, se incorporan sus segundos/estado/ID nativo conservando el UUID y la evidencia importada; marcas nativas adicionales distintas del mismo minuto se mantienen separadas. La migración `20261023150000_attendance_file_import` no reescribe datos existentes.
+
+## Permisos y vacaciones
+
+La página **Asistencia → Permisos** registra solicitudes para faltar, llegar tarde o salir temprano, con fechas inclusivas, motivo y goce de sueldo. Para permisos parciales se captura una hora autorizada, aplicada a cada día laborable del rango en su zona local. Tomar vacaciones solo se permite para faltar con goce de sueldo.
+
+- `GET /employees/:id/leave-profile`: jefe directo, WhatsApp, saldo manual de vacaciones, versión e historial de movimientos.
+- `PUT /employees/:id/leave-profile`: `{ managerId, whatsappPhone, vacationBalance, expectedVersion, adjustmentReason }`. Los teléfonos opcionales se validan y normalizan a E.164 con `libphonenumber-js`, sin duplicarse entre fichas; para números nacionales se usa `PHONE_DEFAULT_COUNTRY`, inicialmente `MX`. La interfaz solicita el código internacional explícito. Un cambio de saldo exige motivo; cambios concurrentes de configuración o saldo devuelven 409. No se permiten jefes inactivos, pendientes ni ciclos jerárquicos.
+- `PATCH /employees/:id` también acepta `leaveProfile` con ese mismo objeto, junto con los datos personales, `isActive` y `scheduling`. La edición por pestañas se guarda completa en una sola transacción y reutiliza las mismas reglas que la ruta individual. Un jefe inválido, WhatsApp duplicado, saldo o jornada desactualizados revierte nombre, estado, versiones de jornada y movimientos de vacaciones. Los clientes anteriores pueden seguir omitiendo `leaveProfile`; solo se escriben los grupos enviados.
+- `POST /leave-requests/preview`: `{ employeeId, kind, from, to, authorizedTime, paid, useVacation, reason }`, con `kind: absence | late_arrival | early_exit`. Devuelve jefe responsable, días laborables con jornada/zona por fecha, saldo, días solicitados y token SHA-256. `authorizedTime` es `null` para faltar o `HH:mm` para permisos parciales. Admite hasta 366 días inclusivos y exige al menos uno laborable.
+- `POST /leave-requests`: `{ input, previewToken, sourceKey }`, donde `sourceKey` es un UUID estable por envío. Crea una solicitud pendiente y su evento en una sola transacción. Reintentar con la misma clave y contenido devuelve la misma solicitud. Un cambio de horario, jefe o saldo posterior a la revisión devuelve 409.
+- `GET /leave-requests?from=YYYY-MM-DD&to=YYYY-MM-DD`: lista paginada de solicitudes que intersectan el rango, con filtros opcionales `branchId`, `employeeId`, `managerId`, `kind` y `status`; `page` inicia en 1 y `limit` en 25, máximo 100.
+- `GET /leave-requests/:id`: solicitud, instantánea original de días/jefe e historial de eventos.
+- `POST /leave-requests/:id/resolve`: `{ action: approve | reject | cancel, expectedVersion, actorEmployeeId, comments }`. Aprobación/rechazo se registran desde la página administrativa a nombre del jefe responsable. El empleado o jefe también pueden cancelar. Rechazar/cancelar requiere motivo. La identidad capturada documenta la resolución administrativa; no representa autenticación personal del jefe por WhatsApp.
+
+El saldo es manual: no se generan días por antigüedad ni vencimientos. Solo se descuentan los días laborables al aprobar, verificando nuevamente el saldo y el calendario. Si cambia la jornada pendiente, se requiere cancelar y registrar una solicitud nueva. Cancelar un aprobado devuelve exactamente los días consumidos. Solicitudes con intervalos superpuestos pendientes/aprobados se rechazan. Los movimientos de vacaciones, decisión, evento y recálculo se guardan atómicamente: si falla cualquiera, se revierte toda la resolución. Los bloqueos usan el mismo orden que la evaluación de asistencia para coordinar aprobaciones, cambios de saldo y sincronizaciones.
+
+Los permisos aprobados aparecen en asistencia diaria y tarjetas, incluso en días sin checadas. `authorized_absence` distingue una ausencia autorizada; `leaveAuthorizations` conserva tipo, goce, vacaciones, motivo e intervalo. Los permisos parciales solo justifican su intervalo y mantienen incidencias por el exceso; los acumulados/descuentos se reconcilian al aprobar o cancelar. Se mantienen la jornada base, checadas originales y tiempo realmente observado; el cálculo de extras sigue anclado a la jornada original, también en rutas.
+
+La migración aditiva `20261029233000_employee_leave_requests` crea perfiles, solicitudes, movimientos y eventos sin reescribir las fichas existentes. Los eventos guardan el destinatario y teléfono resueltos al ocurrir, con `notification_status: awaiting_configuration`. La API actual crea solicitudes de origen `web`; `whatsapp` y `source_key` permiten extender el caso de uso al futuro flujo conversacional. La base de transporte Twilio está documentada en la sección siguiente.
+
+## Base técnica de WhatsApp/Twilio
+
+Implementada siguiendo `.agents/skills/twilio-whatsapp-integration/SKILL.md`. Incluye SDK oficial, firma con URL pública confiable, aislamiento de cuenta/remitente, identificación del empleado por su WhatsApp registrado y activo, colas duraderas de PostgreSQL, intentos idempotentes, ventana de 24 horas, plantillas explícitas, callbacks y estados de conciliación para envíos inciertos.
+
+- `POST /integrations/twilio/whatsapp/incoming`: formulario firmado; persiste mensaje y trabajo antes de confirmar con TwiML vacío.
+- `POST /integrations/twilio/whatsapp/status`: formulario firmado; conserva el estado antes del `200`, incluso cuando el callback llega antes que la respuesta del SDK.
+
+Las variables se encuentran en `.env.example`, con `TWILIO_WHATSAPP_ENABLED=false` por defecto. La migración `20261030210000_whatsapp_foundation` agrega conversaciones, mensajes, intentos, eventos y trabajos. Los mensajes autorizados esperan al futuro `WhatsAppMessageHandler` con estado `awaiting_handler`. El menú, solicitudes por WhatsApp, consultas de asistencia/vacaciones y conexión de avisos al jefe son la siguiente etapa.
+
+Ver **[configuración, estructura, estados y activación de Twilio](docs/whatsapp-twilio.md)** para las URLs HTTPS externas exactas, variables de entorno, mapeo de plantillas y pruebas con SDK simulado.
 
 ## Sucursales, horarios y reglas
 
@@ -119,6 +216,7 @@ Todas las entidades nuevas usan UUID. La sucursal usa su UUID como único identi
 - `GET /attendance/daily?from=YYYY-MM-DD&to=YYYY-MM-DD`: jornadas, movimientos inferidos, incidencias, acumulados y descuentos del día. Filtros opcionales: `branchId` y `subjectId`.
 - `GET /attendance/cards?branchId=UUID&employeeStatus=active|inactive&from=YYYY-MM-DD&to=YYYY-MM-DD`: tarjetas de todos los empleados que coincidan con su sucursal y estado actuales, incluidas las fichas sin checadas. Reutiliza el mismo calendario, historial y cálculo de la tarjeta individual. Requiere los cuatro filtros y admite hasta 366 días inclusivos. La paginación usa `page` (inicialmente 1) y `limit` (5 por defecto, máximo 10), con orden estable por nombre, número y UUID. Devuelve sucursal, periodo, estado, totales, página y tarjetas. Carga los datos de la página por lote en una transacción de solo lectura, sin recalcular ni escribir información.
 - `GET /attendance/cards/export?branchId=UUID&employeeStatus=active|inactive&from=YYYY-MM-DD&to=YYYY-MM-DD`: devuelve JSON con todas las tarjetas coincidentes y `generatedAt`, desde una única instantánea de solo lectura. No admite `page` ni `limit`; la exportación no queda limitada a la página visible. El frontend genera el archivo PDF con estos datos. Comparte filtros, calendario, orden y cálculos con las tarjetas paginadas e individuales; conserva checadas, fotos y registros originales.
+- `GET /attendance/overtime?branchId=UUID&employeeStatus=active|inactive&from=YYYY-MM-DD&to=YYYY-MM-DD`: empleados con extras habilitadas en alguna fecha del periodo, seleccionados por sucursal/estado actuales. Requiere los cuatro filtros y hasta 366 días inclusivos; admite `page` y `limit` (5 por defecto, máximo 10). Devuelve desglose diario, totales por empleado y globales de todos los coincidentes antes de paginar. La consulta es de solo lectura.
 - `GET /attendance/deductions`: mismo rango y filtros; incluye descuentos vigentes y anulados por recálculo.
 - `POST /attendance/recalculate`: reconstrucción transaccional e idempotente de jornadas, incidencias y descuentos. También se ejecuta después de sincronizar checadas y modificar configuraciones relevantes.
 
@@ -150,6 +248,40 @@ La migración `20261021190000_employee_scheduling` agrega `employee_schedule_ver
 
 La migración `20261022000000_unified_branch_configuration` añade metadatos de versiones conjuntas, eliminación y herencia sin reescribir perfiles ni configuraciones existentes. Las comidas automáticas/personales previas conservan su significado y sus márgenes; los modos heredados nuevos son explícitos. El borrado de configuración invalida resultados derivados mediante recálculo, manteniendo IDs de evaluaciones, incidencias y descuentos; estos últimos se anulan con historial cuando dejan de corresponder.
 
+### Horas extras, rutas y descansos
+
+**Empleados → Opciones → Editar → Horas extras** habilita el cálculo por persona; inicialmente está desactivado. `scheduling.overtime` se guarda con la misma vigencia e historial de jornada/comida:
+
+```json
+{
+  "enabled": true,
+  "workMode": "route",
+  "restEnabled": true,
+  "dailyRest": { "startTime": "22:00", "endTime": "06:00" },
+  "additionalRestMinutes": 120
+}
+```
+
+`workMode` admite `daily` o `route`. Con extras habilitadas, la referencia de jornada y retardo es la **base de la sucursal vigente en cada fecha**, aunque exista un horario personal distinto; esa excepción se conserva para cuando se deshabiliten las extras. Se suman los tramos anteriores a entrada y posteriores a salida sin compensar retardos. Un día de descanso cuenta todo el intervalo reconocido como extra, excluyendo comidas completas registradas y descansos configurados; sábado/domingo laborables conservan su jornada normal.
+
+En jornada diaria, las extras son independientes de la validación de comida: basta una entrada y salida laboral reconocidas, en orden y con una jornada de sucursal vigente. La falta de comida completa, una sola marca de comida o su clasificación pendiente no bloquean las extras. Se excluye únicamente la comida real cuyo inicio y regreso están registrados; no se inventan marcas ni duraciones. Las observaciones, el estado de asistencia y los faltantes se conservan, y las horas trabajadas totales siguen sin calcularse cuando no pueden determinarse. Los descuentos de descanso siguen aplicándose una vez por jornada. Si falta entrada/salida laboral válida o la jornada de referencia, las extras permanecen pendientes.
+
+**Horarios y reglas → Configurar sucursal → Márgenes de horas extras** guarda `policy.overtimeEntryMarginMinutes` y `policy.overtimeExitMarginMinutes` (enteros 0–240) con la misma vigencia e historial de reglas. Inicialmente son cero, también para políticas históricas que no contienen estos campos. Son independientes de tolerancias de retardo, repetición de entradas y reconocimiento de movimientos. Las peticiones antiguas que omiten los campos conservan el valor aplicable a su fecha; enviar cero explícito lo desactiva.
+
+Los márgenes son descontables: para jornada 08:30–17:30 con 30 minutos de cada lado, las extras se reconocen antes de 08:00 y después de 18:00. Entrada 08:00 y salida 18:00 dan cero; entrada 07:00 reconoce 1 hora y salida 18:30 reconoce 30 minutos. Los límites son exactos, sin redondear segundos ni compensar retardos. `beforeSeconds`, `afterSeconds` y `grossSeconds` ya excluyen los márgenes; los descansos configurados se aplican después y no vuelven a descontar intervalos excluidos. El tiempo trabajado observado no se reduce por estos márgenes. En días no laborables no se aplican. En ruta se usan las reglas y jornada vigentes en cada tramo diario, sin descontar repetidamente un mismo intervalo por tener varias rutas ese día.
+
+Los resultados calculados incluyen `entryMarginMinutes` y `exitMarginMinutes` efectivos; los pendientes no inventan esos valores y los días de descanso usan cero. Pantalla, detalle, tarjetas y PDF muestran los márgenes aplicados por fecha. Guardar, versionar o eliminar las reglas recalcula los reportes y conserva las checadas y configuraciones personales. Los campos viven en el JSONB de políticas existente y no requieren una migración ni reescritura de políticas anteriores.
+
+En ruta, la primera marca efectiva abre el recorrido y la siguiente efectiva lo cierra, sin límite de dos días. Las repeticiones iniciales respetan el margen de sucursal y las menores de un minuto siguen siendo repetidas aun con margen cero. La ruta no requiere movimientos de comida; incluye noches y todo el intervalo hasta el regreso. Una marca intermedia efectiva se interpreta como regreso, por lo que este modo corresponde a quienes solo registran inicio/regreso. `punchState` no decide el movimiento. La comida personal permanece guardada para el modo diario. Solo la entrada inicial evalúa retardo; el regreso no es una nueva llegada. Deshabilitar extras detiene nuevas rutas, y una ruta ya abierta conserva su regreso pendiente.
+
+Los resultados incluyen `routes` con IDs/fechas de las marcas originales y segmentos derivados por fecha local; no se insertan checadas sintéticas. Una ruta abierta permanece pendiente y se extiende hasta el día actual en cada recálculo. Los días sin marcas dentro de una ruta aparecen en tarjetas y resúmenes, con sesiones `inferredFromRoute: true`. Los horarios y zonas aplicables se resuelven por fecha.
+
+Los descansos solo se descuentan al habilitarlos: horario diario opcional (puede cruzar medianoche) y cantidad adicional una vez por jornada/ruta, combinables. Se excluyen solapamientos con comidas/otros intervalos y solo reducen extras coincidentes, nunca debajo de cero. El adicional de una ruta usa su configuración de inicio y se prorratea proporcionalmente a las extras disponibles por día después del descanso diario, conservando segundos exactos. Consultar solo parte de la ruta no vuelve a aplicar ese descanso. Si falta una jornada aplicable, la ruta queda pendiente de cálculo.
+
+`overtime` diario distingue `calculated`, `pending` y `no_records`; los tiempos se expresan en **segundos** y son `null` cuando no pueden determinarse. Los totales excluyen pendientes y muestran su cantidad. Guardar configuraciones del empleado, modificar/eliminar la jornada de sucursal y sincronizar nuevas marcas recalcula los resultados. Las peticiones antiguas que omiten `overtime` conservan el ajuste vigente; asignaciones y unificación también lo preservan. La migración `20261022230000_employee_overtime` agrega un JSONB inicialmente deshabilitado sin modificar checadas ni perfiles originales.
+
+`GET /attendance/overtime/export?branchId=UUID&employeeStatus=active|inactive&from=YYYY-MM-DD&to=YYYY-MM-DD` devuelve todos los empleados elegibles, desglose diario, totales individuales/globales y `generatedAt` para el reporte imprimible. Usa los mismos cálculos que `/attendance/overtime`, en una sola instantánea PostgreSQL `REPEATABLE READ, READ ONLY`, sin paginación ni recálculo. Rechaza `page`/`limit` para evitar exportaciones parciales. La consulta y generación del PDF no alteran checadas, fichas, configuraciones, evaluaciones ni descuentos.
+
 ### Clasificación automática por estados de jornada
 
 El clasificador usa el horario vigente para la fecha y la zona de la sucursal. Reconoce entrada, salida a comer, regreso y salida laboral aunque el reloj marque todas como Entrada o Salida.
@@ -165,6 +297,14 @@ El clasificador usa el horario vigente para la fecha y la zona de la sucursal. R
 - Una marca final de jornada tiene prioridad como salida laboral sobre un posible regreso de comida; el regreso faltante se señala sin inventar una hora ni duración.
 - Duplicados, faltantes y marcas fuera de horario no se convierten por sí solos en sanciones. Los retardos se calculan sobre movimientos reconocidos y reglas vigentes; una fecha anterior a la primera política puede clasificarse sin aplicar reglas futuras.
 - Asistencia diaria, Checadas y el resumen por usuario comparten esta clasificación. Las marcas originales, UUID, fotos e historial se conservan. El recálculo es idempotente y anula descuentos obsoletos conservando sus filas e identidad.
+
+### Tolerancias por minuto completo
+
+Las tolerancias de entrada y comida incluyen todo el minuto límite en la zona de la sucursal. Se comparan los minutos de reloj de la hora real y la esperada, sin redondear los segundos hacia arriba. Por ejemplo, una entrada a las 08:30 con tolerancia de 15 minutos permite checar hasta las 08:45:59.999; desde las 08:46:00 corresponde un retardo de 16 minutos. Con tolerancia cero también se admite todo el minuto esperado.
+
+En comida, el regreso esperado conserva los segundos de la salida real más la duración asignada: si resulta 16:00:37 y la tolerancia es de 15 minutos, se permite regresar hasta las 16:15:59.999. El mismo criterio se aplica a la entrada inicial de una ruta y a la evaluación de permisos autorizados. Las checadas originales, las duraciones observadas y las horas extras conservan sus segundos exactos.
+
+El recálculo aplica este criterio también al histórico, actualiza los contadores, inactiva las incidencias que dejan de corresponder y anula sus descuentos obsoletos, conservando sus registros e identidad.
 
 ### Estado y nombres del empleado
 
@@ -182,15 +322,23 @@ Antes de migrar, `npm run backup:database` crea un archivo PostgreSQL completo, 
 
 Después de refactorizar o migrar, `PG_CONTAINER=reloj-checador-postgres-1 npm run verify:data -- backups/<manifiesto>.json` restaura el respaldo en otra base temporal y compara los registros con la base actual. Protege fichas, nombres, fechas, perfiles originales, checadas, fotos binarias, asignaciones e historial; para resultados derivados comprueba sus identidades y relaciones. Admite registros nuevos de sincronización, comprueba relaciones huérfanas/relojes duplicados y guarda un informe en `backups/`.
 
-Con comida individual configurada, el regreso esperado es la salida real más la duración asignada. Con tolerancia cero, cualquier retraso reconocido posterior al límite cuenta. Salir tarde y regresar tarde generan dos incidencias de comida. En modo automático se registra únicamente la duración observada, sin sanciones de comida contra un horario inexistente. Las lecturas repetidas conservan su registro original y las jornadas incompletas o ambiguas no reciben movimientos inventados.
+Con comida individual configurada, el regreso esperado es la salida real más la duración asignada. Los retardos se evalúan por minuto completo, incluso con tolerancia cero. Salir tarde y regresar tarde generan dos incidencias de comida. En modo automático se registra únicamente la duración observada, sin sanciones de comida contra un horario inexistente. Las lecturas repetidas conservan su registro original y las jornadas incompletas o ambiguas no reciben movimientos inventados.
 
-El driver TCP/IP interpreta las fechas locales de `node-zklib` con la zona horaria de la sucursal antes de guardarlas en UTC. Por ejemplo, Cancún usa `America/Cancun`, una hora adelante de Ciudad de México. La hora original se conserva en `rawData.deviceLocalTime`; una nueva sincronización corrige las horas por número de registro del reloj sin duplicar las checadas.
+El driver TCP/IP interpreta las fechas locales de `node-zklib` con la zona horaria de la sucursal antes de guardarlas en UTC. Por ejemplo, Cancún usa `America/Cancun`, una hora adelante de Ciudad de México. La hora original se conserva en `rawData.deviceLocalTime`; una nueva sincronización reconoce la misma marca sin modificar su instante UTC ni sus datos originales, aunque cambie la configuración de visualización de la sucursal.
 
 La zona se elige en **Sucursales → Editar → Zona horaria**. Al guardar se recalculan las jornadas y se actualizan las vistas. **Checadas** usa la zona de la sucursal o reloj seleccionado y consulta el día completo entre sus medianoches locales; con todas las sucursales utiliza Ciudad de México como referencia. Los cambios de visualización conservan los instantes UTC almacenados. Las zonas fronterizas respetan sus cambios estacionales de horario.
 
 Los contadores de llegada y comida son independientes. Con tres retardos permitidos, el cuarto genera un día de descuento y consume ese grupo. El siguiente grupo comienza con su primer retardo. Se puede elegir mes calendario o periodos de 30 días desde el primer retardo; el extremo final del periodo es exclusivo. Los descuentos son registros de días para consulta y nómina, no movimientos bancarios. Un recálculo conserva los UUID de las incidencias y descuentos que siguen vigentes; las sanciones que dejan de corresponder quedan anuladas con historial.
 
 El estado original del reloj se muestra como dato de verificación en **Checadas**. La etiqueta principal de movimiento y los resúmenes utilizan la clasificación automática por horarios.
+
+## Acceso al panel
+
+El panel requiere usuario y contraseña. Las cuentas son independientes de empleados y tienen rol administrador, RH o encargado; RH y encargados reciben una o varias sucursales explícitas. El backend restringe listas, recursos por ID, fotos, operaciones y exportaciones. El primer acceso con una contraseña temporal exige cambiarla. La instalación, recuperación del administrador, permisos y configuración de cookies/orígenes están en [docs/panel-auth.md](docs/panel-auth.md).
+
+## Base de datos en Neon
+
+La aplicación admite PostgreSQL en Neon mediante conexión directa y SSL con verificación de certificado. La sincronización y el recálculo guardan resultados por lotes para reducir viajes de red, conservando identidades, checadas originales e historial. La configuración, migración verificada, activación y respaldos se describen en [docs/neon-database.md](docs/neon-database.md).
 
 ## Verificación
 

@@ -32,6 +32,8 @@ export const branchSchema = z.object({
 });
 
 export const policySettingsSchema = z.object({
+  overtimeEntryMarginMinutes: z.number().int().min(0).max(240).optional(),
+  overtimeExitMarginMinutes: z.number().int().min(0).max(240).optional(),
   entryRepeatWindowMinutes: z.number().int().min(0).max(120).default(DEFAULT_ENTRY_REPEAT_WINDOW_MINUTES),
   entryToleranceMinutes: z.number().int().min(0).max(120),
   mealToleranceMinutes: z.number().int().min(0).max(120),

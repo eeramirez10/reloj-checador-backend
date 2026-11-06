@@ -1,5 +1,10 @@
 import { formatDateTimeInTimeZone } from './attendance-summary.js';
 import { DEFAULT_ENTRY_REPEAT_WINDOW_MINUTES, type PolicySettings, type ScheduleSettings } from './organization.js';
+import type { OvertimeDay, RouteDaySegment } from './overtime.js';
+import { addDays, dateAtLocalTime } from './local-date.js';
+import type { LeaveAuthorization } from './leave.js';
+import { latenessMinutes, toleranceDeadline } from './tolerance.js';
+export { addDays, dateAtLocalTime } from './local-date.js';
 
 export type Movement = 'entry' | 'meal_departure' | 'meal_return' | 'exit' | 'unclassified' | 'duplicate' | 'outside_schedule';
 export type IncidentKind = 'arrival' | 'meal_departure' | 'meal_return';
@@ -7,7 +12,8 @@ export interface EvaluationPunch { id: string; occurredAt: Date }
 export interface ClassifiedPunch { id: string; occurredAt: string; localTime: string; movement: Movement }
 export interface DailyEvaluation {
   date: string;
-  status: 'complete' | 'incomplete' | 'in_progress' | 'ambiguous' | 'day_off' | 'unconfigured';
+  status: 'complete' | 'incomplete' | 'in_progress' | 'ambiguous' | 'day_off' | 'unconfigured' | 'authorized_absence';
+  leaveAuthorizations?: LeaveAuthorization[];
   punches: ClassifiedPunch[];
   entry?: string;
   mealDeparture?: string;
@@ -16,28 +22,11 @@ export interface DailyEvaluation {
   exit?: string;
   mealMinutes?: number;
   workedMinutes?: number;
+  overtime?: OvertimeDay;
+  routes?: RouteDaySegment[];
   issues: string[];
   incidents: Array<{ kind: IncidentKind; logId: string; occurredAt: string; minutes: number }>;
   missingMovements?: Array<'entry' | 'meal_departure' | 'meal_return' | 'exit'>;
-}
-
-export function addDays(date: string, count: number): string {
-  const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + count);
-  return value.toISOString().slice(0, 10);
-}
-
-export function dateAtLocalTime(date: string, time: string, timeZone: string): Date {
-  const target = `${date}T${time}:00`;
-  const wallTime = Date.parse(`${target}Z`);
-  let instant = wallTime;
-  for (let index = 0; index < 4; index += 1) {
-    const local = formatDateTimeInTimeZone(new Date(instant), timeZone).replace(' ', 'T');
-    const offset = Date.parse(`${local}Z`) - wallTime;
-    if (offset === 0) return new Date(instant);
-    instant -= offset;
-  }
-  throw new Error(`La hora ${target} no existe en ${timeZone}.`);
 }
 
 type DayState = 'awaiting_entry' | 'working' | 'on_meal' | 'returned' | 'finished';
@@ -99,7 +88,7 @@ function evaluateAutomaticMeal(result: DailyEvaluation, logs: EvaluationPunch[],
 }
 
 export function evaluateDay(date: string, logs: EvaluationPunch[], schedule: ScheduleSettings,
-  policy: PolicySettings | undefined, timeZone: string, now = new Date()): DailyEvaluation {
+  policy: PolicySettings | undefined, timeZone: string, now = new Date(), options: { firstPunchIsEntry?: boolean } = {}): DailyEvaluation {
   const weekday = new Date(`${date}T12:00:00Z`).getUTCDay() || 7;
   const dayOff = !schedule.workDays.includes(weekday);
   const start = dateAtLocalTime(date, schedule.entryTime, timeZone).getTime();
@@ -121,8 +110,8 @@ export function evaluateDay(date: string, logs: EvaluationPunch[], schedule: Sch
   };
   const recordLate = (log: EvaluationPunch, expected: number, tolerance: number, kind: IncidentKind) => {
     if (!policy || dayOff) return;
-    const difference = log.occurredAt.getTime() - expected;
-    if (difference > tolerance * 60_000) result.incidents.push({ kind, logId: log.id, occurredAt: log.occurredAt.toISOString(), minutes: Math.ceil(difference / 60_000) });
+    const minutes = latenessMinutes(log.occurredAt.getTime(), expected);
+    if (minutes > tolerance) result.incidents.push({ kind, logId: log.id, occurredAt: log.occurredAt.toISOString(), minutes });
   };
   if (schedule.mealDetection === 'automatic') {
     return evaluateAutomaticMeal(result, unique, { end, margin, dayOff, now }, classify,
@@ -138,7 +127,7 @@ export function evaluateDay(date: string, logs: EvaluationPunch[], schedule: Sch
     }
     const departure = schedule.mealEnabled && (state === 'working' || state === 'awaiting_entry')
       && instant >= mealStart - margin && instant <= mealEnd + margin;
-    if (state === 'awaiting_entry' && index === 0 && (!schedule.mealEnabled || instant < mealStart - margin)) {
+    if (state === 'awaiting_entry' && index === 0 && (options.firstPunchIsEntry || !schedule.mealEnabled || instant < mealStart - margin)) {
       result.entry = classify(log, 'entry'); state = 'working';
       recordLate(log, start, policy?.entryToleranceMinutes ?? 0, 'arrival');
       continue;
@@ -177,9 +166,9 @@ export function evaluateDay(date: string, logs: EvaluationPunch[], schedule: Sch
   missing('entry', 'Falta la entrada del trabajo.', !result.entry && (closed || now.getTime() > start + margin));
   if (schedule.mealEnabled) {
     missing('meal_departure', 'Falta la salida a comer.', !result.mealDeparture && (closed || now.getTime() > mealEnd + margin));
-    const returnDeadline = result.expectedMealReturn ? Date.parse(result.expectedMealReturn) + (policy?.mealToleranceMinutes ?? 0) * 60_000
-      : mealEnd + margin + (schedule.mealDurationMinutes + (policy?.mealToleranceMinutes ?? 0)) * 60_000;
-    missing('meal_return', 'Regreso de comida no registrado.', !result.mealReturn && (closed || now.getTime() > returnDeadline));
+    const expectedReturn = result.expectedMealReturn ? Date.parse(result.expectedMealReturn) : mealEnd + margin + schedule.mealDurationMinutes * 60_000;
+    const returnDeadline = toleranceDeadline(expectedReturn, policy?.mealToleranceMinutes ?? 0);
+    missing('meal_return', 'Regreso de comida no registrado.', !result.mealReturn && (closed || now.getTime() >= returnDeadline));
   }
   missing('exit', 'Falta la salida del trabajo.', !result.exit && now.getTime() > end + margin);
   if (schedule.mealPending) result.issues.push('El horario individual de comida ya no cabe en la jornada aplicable; revisa su configuración.');

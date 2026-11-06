@@ -7,6 +7,8 @@ export interface EmployeeCatalogRecord {
   hireDate?: string; terminationDate?: string;
 }
 export interface EmployeeClockRecord {
+  uid?: number;
+  roleObservedAt?: string | null;
   id: string; deviceId: string; userId: string; name?: string; deviceName: string;
   branchId?: string; bindingStatus: 'active' | 'historical'; hasPhoto: boolean;
   syncedAt: string; cardNumber?: string; role?: number; originalProfile: Record<string, unknown>;

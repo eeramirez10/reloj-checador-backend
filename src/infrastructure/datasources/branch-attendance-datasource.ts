@@ -5,6 +5,7 @@ import { NotFoundError } from '../../domain/errors/not-found-error.js';
 import type { Database } from '../database/database.js';
 import { employeeSelectColumns, mapEmployeeRow, type EmployeeRow } from './employee-datasource.js';
 import { loadEmployeeAttendanceHistories } from './employee-attendance-datasource.js';
+import { assertAttendanceHistoryAccess } from '../security/attendance-history-access.js';
 
 export class PrismaBranchAttendanceDatasource implements BranchAttendanceDatasource {
   constructor(private readonly database: Pick<Database, 'transaction'>) {}
@@ -27,10 +28,11 @@ export class PrismaBranchAttendanceDatasource implements BranchAttendanceDatasou
       const totalEmployees = (await client.query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM employees
         WHERE branch_id=$1 AND is_active=$2 AND identification_status <> 'merged'`, [query.branchId, isActive])).rows[0].count;
       const page = pagination ? Math.min(pagination.page, Math.max(1, Math.ceil(totalEmployees / pagination.limit))) : 1;
-      const employees = (await client.query<EmployeeRow>(`SELECT ${employeeSelectColumns} FROM employees
+      const employees = (await client.query<EmployeeRow>(`SELECT ${employeeSelectColumns()} FROM employees
         WHERE branch_id=$1 AND is_active=$2 AND identification_status <> 'merged'
         ORDER BY name, employee_number NULLS LAST, id LIMIT $3::int OFFSET $4::int`,
       [query.branchId, isActive, pagination?.limit ?? null, pagination ? (page - 1) * pagination.limit : 0])).rows.map(mapEmployeeRow);
+      await assertAttendanceHistoryAccess(client, employees.map((employee) => employee.id), query);
       const histories = await loadEmployeeAttendanceHistories(client, employees.map((employee) => employee.id), query);
       return { branch, employees, histories, page, totalEmployees };
     });

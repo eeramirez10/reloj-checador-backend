@@ -6,6 +6,7 @@ describe('AttendanceRepository', () => {
     const eventKeys = new Set<string>();
     const repository = new AttendanceRepository({
       query: async (_sql: string, values: unknown[] = []) => {
+        if (_sql.startsWith('SELECT')) return { rows: [], rowCount: 0 };
         const key = values[2] as string;
         if (eventKeys.has(key)) return { rows: [], rowCount: 0 };
         eventKeys.add(key);
@@ -18,12 +19,12 @@ describe('AttendanceRepository', () => {
     expect(await repository.insertIfNew(deviceId, event)).toBe(false);
   });
 
-  it('backfills verification and punch state on an existing event', async () => {
+  it('never updates a previously downloaded native event', async () => {
     const queries: Array<{ text: string; values: unknown[] }> = [];
     const repository = new AttendanceRepository({
       query: async (text: string, values: unknown[] = []) => {
         queries.push({ text, values });
-        return text.startsWith('INSERT') ? { rows: [], rowCount: 0 } : { rows: [], rowCount: 1 };
+        return { rows: [{ id: 'existing-event' }], rowCount: 1 };
       }
     } as any);
     const event = {
@@ -32,9 +33,8 @@ describe('AttendanceRepository', () => {
     };
 
     expect(await repository.insertIfNew('device-1', event)).toBe(false);
-    expect(queries[1].text).toContain('verification_type = COALESCE');
-    expect(queries[1].values).toContain(0);
-    expect(queries[1].values.at(-1)).toBe(JSON.stringify(event.raw));
+    expect(queries).toHaveLength(1);
+    expect(queries[0].text.startsWith('SELECT')).toBe(true);
   });
 
   it('returns the associated profile-photo availability', async () => {

@@ -9,7 +9,7 @@ import { PrismaAttendanceDatasource } from '../src/infrastructure/datasources/at
 import { branchSchema } from '../src/presentation/validators/organization.js';
 import { dateAtLocalTime } from '../src/domain/entities/schedule-evaluator.js';
 import type { Branch } from '../src/domain/entities/organization.js';
-import { buildApp } from '../src/main.js';
+import { buildApp } from './helpers/build-test-app.js';
 
 const connection = process.env.INTEGRATION_DATABASE_URL;
 const integration = connection ? describe : describe.skip;

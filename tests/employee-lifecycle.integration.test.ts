@@ -9,7 +9,7 @@ import { EmployeeLifecycle } from '../src/infrastructure/datasources/employee-li
 import { PrismaEmployeeDatasource as EmployeeRepository } from '../src/infrastructure/datasources/employee-datasource.js';
 import { PrismaDeviceDatasource as DeviceRepository } from '../src/infrastructure/datasources/device-datasource.js';
 import { PrismaDeviceUserDatasource as DeviceUserRepository } from '../src/infrastructure/datasources/device-user-datasource.js';
-import { buildApp, createEmployeeRegistry, createEmployeeNames } from '../src/main.js';
+import { buildApp, createEmployeeRegistry, createEmployeeNames } from './helpers/build-test-app.js';
 
 const connection = process.env.INTEGRATION_DATABASE_URL;
 const integration = connection ? describe : describe.skip;

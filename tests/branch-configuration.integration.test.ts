@@ -7,7 +7,7 @@ import { PrismaDeviceDatasource } from '../src/infrastructure/datasources/device
 import { PrismaDeviceUserDatasource } from '../src/infrastructure/datasources/device-user-datasource.js';
 import { PrismaAttendanceDatasource } from '../src/infrastructure/datasources/attendance-datasource.js';
 import { PrismaEmployeeSchedulingDatasource } from '../src/infrastructure/datasources/employee-scheduling-datasource.js';
-import { buildApp, createAttendanceEvaluation } from '../src/main.js';
+import { buildApp, createAttendanceEvaluation } from './helpers/build-test-app.js';
 import { branchSchema } from '../src/presentation/validators/organization.js';
 import { dateAtLocalTime } from '../src/domain/entities/schedule-evaluator.js';
 import type { BranchConfigurationInput, configurationView } from '../src/domain/entities/branch-configuration.js';

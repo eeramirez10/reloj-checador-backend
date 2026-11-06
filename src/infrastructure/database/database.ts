@@ -1,6 +1,7 @@
 import { Pool, type QueryResultRow } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient, type Prisma } from './generated/client.js';
+import { connectionString as normalizeConnectionString } from './connection-string.js';
 
 export interface Queryable {
   readonly prisma: Prisma.TransactionClient;
@@ -26,10 +27,12 @@ export class Database extends PrismaQueryable {
   private readonly client: PrismaClient;
 
   constructor(connectionString: string) {
-    const url = new URL(connectionString);
+    const url = new URL(normalizeConnectionString(connectionString));
     const schema = url.searchParams.get('schema') ?? url.searchParams.get('options')?.match(/search_path=([a-zA-Z0-9_]+)/)?.[1] ?? 'public';
     url.searchParams.delete('schema');
-    const pool = new Pool({ connectionString: url.toString(), connectionTimeoutMillis: 10_000, options: url.searchParams.get('options') ?? `-c search_path=${schema}` });
+    const poolConfig = { connectionString: url.toString(), connectionTimeoutMillis: 25_000, max: 10, enableChannelBinding: true,
+      options: url.searchParams.get('options') ?? `-c search_path=${schema}` };
+    const pool = new Pool(poolConfig);
     const client = new PrismaClient({ adapter: new PrismaPg(pool, { schema }) });
     super(client);
     this.pool = pool;
@@ -37,8 +40,8 @@ export class Database extends PrismaQueryable {
     pool.on('error', (error) => console.error('Error en una conexión PostgreSQL inactiva.', error));
   }
 
-  transaction<T>(callback: (client: Queryable) => Promise<T>): Promise<T> {
-    return this.client.$transaction((client) => callback(new PrismaQueryable(client)), { maxWait: 10_000, timeout: 60_000 });
+  transaction<T>(callback: (client: Queryable) => Promise<T>, options?: { timeoutMs: number }): Promise<T> {
+    return this.client.$transaction((client) => callback(new PrismaQueryable(client)), { maxWait: 10_000, timeout: options?.timeoutMs ?? 60_000 });
   }
 
   async executeScript(text: string): Promise<void> {

@@ -6,10 +6,11 @@ import type { WorkSchedule } from '../../domain/entities/organization.js';
 import { formatDateTimeInTimeZone } from '../../domain/entities/attendance-summary.js';
 import { ConfigurationError, ConflictError } from '../../domain/errors/app-error.js';
 import type { Queryable } from '../database/database.js';
+import { DEFAULT_OVERTIME_SETTINGS, type OvertimeSettings } from '../../domain/entities/overtime.js';
 
 export const scheduleVersionColumns = `id, employee_id AS "employeeId", effective_from::text AS "effectiveFrom", work_hours AS "workHours", meal,
   COALESCE(meal_mode, CASE WHEN meal IS NULL THEN 'automatic' ELSE 'individual' END) AS "mealMode",
-  recognition_margin_minutes AS "recognitionMarginMinutes", recognition_margin_inherited AS "recognitionMarginInherited", created_at AS "createdAt", source`;
+  recognition_margin_minutes AS "recognitionMarginMinutes", recognition_margin_inherited AS "recognitionMarginInherited", overtime_settings AS overtime, created_at AS "createdAt", source`;
 const scheduleColumns = 'id, branch_id AS "branchId", name, effective_from::text AS "effectiveFrom", is_default AS "isDefault", settings, created_at AS "createdAt", superseded_from::text AS "supersededFrom"';
 
 export class PrismaEmployeeSchedulingDatasource implements EmployeeSchedulingDatasource {
@@ -49,9 +50,12 @@ export class PrismaEmployeeSchedulingDatasource implements EmployeeSchedulingDat
     if (input.expectedVersionId !== undefined && input.expectedVersionId !== (latest?.id ?? null)) {
       throw new ConflictError('Otro cambio actualizó el horario del empleado. Actualiza la ficha antes de guardar.');
     }
-    await this.database.query(`INSERT INTO employee_schedule_versions (id,employee_id,effective_from,work_hours,meal,recognition_margin_minutes,meal_mode,recognition_margin_inherited,created_at)
-      VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,clock_timestamp())`, [randomUUID(), employeeId, input.effectiveFrom,
+    const previous = input.overtime === undefined ? (await this.database.query<{ overtime: OvertimeSettings }>(`SELECT overtime_settings AS overtime
+      FROM employee_schedule_versions WHERE employee_id=$1 AND effective_from <= $2::date ORDER BY effective_from DESC,created_at DESC,id DESC LIMIT 1`, [employeeId,input.effectiveFrom])).rows[0]?.overtime : undefined;
+    await this.database.query(`INSERT INTO employee_schedule_versions (id,employee_id,effective_from,work_hours,meal,recognition_margin_minutes,meal_mode,recognition_margin_inherited,overtime_settings,created_at)
+      VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9::jsonb,clock_timestamp())`, [randomUUID(), employeeId, input.effectiveFrom,
       input.workHours ? JSON.stringify(input.workHours) : null, input.meal ? JSON.stringify(input.meal) : null, input.recognitionMarginMinutes,
-      input.mealMode ?? (input.meal ? 'individual' : 'automatic'), input.recognitionMarginInherited ?? false]);
+      input.mealMode ?? (input.meal ? 'individual' : 'automatic'), input.recognitionMarginInherited ?? false,
+      JSON.stringify(input.overtime ?? previous ?? DEFAULT_OVERTIME_SETTINGS)]);
   }
 }

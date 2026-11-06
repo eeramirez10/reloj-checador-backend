@@ -27,11 +27,13 @@ describe('schedule-based attendance', () => {
     expect(result.incidents.map((value) => [value.kind, value.minutes])).toEqual([['arrival', 1], ['meal_departure', 10], ['meal_return', 1]]);
   });
 
-  it('respects both tolerance boundaries, including seconds with zero tolerance', () => {
+  it('includes the entire limit minute, including with zero tolerance', () => {
     const within = evaluateDay(date, logs(['08:35', '15:05', '16:10', '18:00']), schedule, { ...policy, entryToleranceMinutes: 5, mealToleranceMinutes: 5 }, zone, now);
     expect(within.incidents).toHaveLength(0);
     const punches = logs(['08:30', '14:30', '15:30', '18:00']);
     punches[0].occurredAt = new Date(punches[0].occurredAt.getTime() + 1000);
+    expect(evaluateDay(date, punches, schedule, policy, zone, now).incidents).toEqual([]);
+    punches[0].occurredAt = dateAtLocalTime(date, '08:31', zone);
     expect(evaluateDay(date, punches, schedule, policy, zone, now).incidents[0].kind).toBe('arrival');
   });
 

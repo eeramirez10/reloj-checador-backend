@@ -26,6 +26,7 @@ export class PrismaEmployeeNameDatasource implements EmployeeNameDatasource {
 
   transaction<T>(operation: (session: EmployeeNameSession) => Promise<T>): Promise<T> {
     return this.database.transaction(async (client) => {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('attendance-evaluation'))::text");
       await client.query("SELECT pg_advisory_xact_lock(hashtext('employee-name-prefill'))::text");
       return operation(new PrismaEmployeeNameSession(client));
     });

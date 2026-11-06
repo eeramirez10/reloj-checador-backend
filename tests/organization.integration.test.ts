@@ -10,7 +10,7 @@ import { PrismaDeviceUserDatasource as DeviceUserRepository } from '../src/infra
 import { PrismaAttendanceDatasource as AttendanceRepository } from '../src/infrastructure/datasources/attendance-datasource.js';
 import type { AttendanceEvaluationService } from '../src/domain/use-cases/evaluate-attendance.js';
 import { dateAtLocalTime } from '../src/domain/entities/schedule-evaluator.js';
-import { buildApp, createAttendanceEvaluation, createEmployeeRegistry } from '../src/main.js';
+import { buildApp, createAttendanceEvaluation, createEmployeeRegistry } from './helpers/build-test-app.js';
 
 const connection = process.env.INTEGRATION_DATABASE_URL;
 const integration = connection ? describe : describe.skip;

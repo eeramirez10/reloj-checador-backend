@@ -1,10 +1,14 @@
 import type { Employee } from './employee.js';
 import type { ScheduleSettings } from './organization.js';
 import type { ClassifiedPunch, DailyEvaluation } from './schedule-evaluator.js';
+import type { OvertimeDay, RouteDaySegment } from './overtime.js';
+import type { LeaveAuthorization } from './leave.js';
 
 export interface AttendancePeriod { from: string; to: string }
 export type EmployeeAttendanceStatus = DailyEvaluation['status'] | 'no_records' | 'upcoming';
 export interface EmployeeAttendanceDay {
+  leaveAuthorizations?: LeaveAuthorization[];
+  unauthorizedEarlyExitMinutes?: number | null;
   date: string;
   status: EmployeeAttendanceStatus;
   branchName: string | null;
@@ -17,6 +21,8 @@ export interface EmployeeAttendanceDay {
   exit: string | null;
   mealMinutes: number | null;
   workedMinutes: number | null;
+  overtime?: OvertimeDay;
+  routes?: RouteDaySegment[];
   arrivalDelayMinutes: number | null;
   earlyExitMinutes: number | null;
   issues: string[];
@@ -25,6 +31,7 @@ export interface EmployeeAttendanceDay {
   incidents: DailyEvaluation['incidents'];
 }
 export interface EmployeeAttendanceSummary {
+  authorizedAbsenceDays?: number;
   recordedDays: number;
   completeDays: number;
   incompleteDays: number;

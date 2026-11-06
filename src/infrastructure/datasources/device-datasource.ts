@@ -3,6 +3,7 @@ import type { CreateDeviceInput, Device, DeviceDriver } from '../../domain/entit
 import type { DeviceDatasource } from '../../domain/datasources/persistence.js';
 import type { Queryable } from '../database/database.js';
 import type { Prisma } from '../database/generated/client.js';
+import { scopedBranchIds } from '../security/access-context.js';
 
 const include = { branches: { select: { time_zone: true } } } as const;
 type DeviceRecord = Prisma.devicesGetPayload<{ include: typeof include }>;
@@ -20,7 +21,8 @@ export class PrismaDeviceDatasource implements DeviceDatasource {
   constructor(private readonly database: Queryable) {}
 
   async list(): Promise<Device[]> {
-    return (await this.database.prisma.devices.findMany({ where: { deleted_at: null }, include, orderBy: { name: 'asc' } })).map(mapDevice);
+    const ids = scopedBranchIds();
+    return (await this.database.prisma.devices.findMany({ where: { deleted_at: null, ...(ids ? { branch_id: { in: ids } } : {}) }, include, orderBy: { name: 'asc' } })).map(mapDevice);
   }
 
   async listEnabled(): Promise<Device[]> {

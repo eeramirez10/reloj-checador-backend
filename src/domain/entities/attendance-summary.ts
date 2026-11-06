@@ -2,6 +2,7 @@ export interface AttendanceSession {
   entry: Date;
   exit?: Date;
   workedMinutes?: number;
+  inferredFromRoute?: boolean;
 }
 
 export interface DailyAttendanceSummary {
@@ -19,7 +20,8 @@ export interface DailyAttendanceSummary {
 
 interface SummaryDay {
   date: string; entry?: string; mealDeparture?: string; mealReturn?: string; exit?: string; workedMinutes?: number;
-  punches: Array<{ occurredAt: string; movement: string }>; issues: string[]; missingMovements?: string[];
+  punches: Array<{ id: string; occurredAt: string; movement: string }>; issues: string[]; missingMovements?: string[];
+  routes?: Array<{ entryLogId: string; exitLogId: string | null; enteredAt: string; exitedAt: string | null; segmentStart: string; segmentEnd: string | null; workedSeconds?: number }>;
 }
 
 export function formatDateTimeInTimeZone(date: Date, timeZone: string): string {
@@ -40,10 +42,22 @@ export function summarizeAttendance(days: SummaryDay[]): DailyAttendanceSummary[
       sessions.push({ entry: new Date(entry), exit: exit ? new Date(exit) : undefined,
         workedMinutes: exit ? Math.round((Date.parse(exit) - Date.parse(entry)) / 60_000) : undefined });
     };
-    session(day.entry, day.mealDeparture ?? (day.workedMinutes !== undefined ? day.exit : undefined));
-    session(day.mealReturn, day.exit);
+    if (day.routes?.length) {
+      for (const route of day.routes) sessions.push({ entry: new Date(route.segmentStart), exit: route.segmentEnd ? new Date(route.segmentEnd) : undefined,
+        workedMinutes: route.workedSeconds !== undefined ? Math.round(route.workedSeconds / 60) : undefined, inferredFromRoute: true });
+      const routeLogIds = new Set(day.routes.flatMap((route) => [route.entryLogId,route.exitLogId]));
+      const dailyPunches = day.punches.filter((punch) => !routeLogIds.has(punch.id));
+      const movement = (kind: string) => dailyPunches.find((punch) => punch.movement === kind)?.occurredAt;
+      session(movement('entry'),movement('meal_departure') ?? (day.workedMinutes !== undefined ? movement('exit') : undefined));
+      session(movement('meal_return'),movement('exit'));
+      sessions.sort((left,right) => left.entry.getTime() - right.entry.getTime());
+    } else {
+      session(day.entry, day.mealDeparture ?? (day.workedMinutes !== undefined ? day.exit : undefined));
+      session(day.mealReturn, day.exit);
+    }
     const lastSession = sessions.at(-1);
-    const open = !day.exit && !lastSession?.exit ? lastSession?.entry : undefined;
+    const openRoute = day.routes?.find((route) => !route.exitedAt);
+    const open = openRoute ? new Date(openRoute.enteredAt) : (!day.exit || day.routes?.length) && !lastSession?.exit ? lastSession?.entry : undefined;
     return {
       date: day.date, firstEntry: day.entry ? new Date(day.entry) : undefined, lastExit: day.exit ? new Date(day.exit) : undefined,
       openEntry: open, workedMinutes: day.workedMinutes ?? null, sessions, inferred: true,

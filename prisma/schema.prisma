@@ -89,6 +89,22 @@ model attendance_logs {
   @@index([device_id, occurred_at(sort: Desc)], map: "attendance_logs_device_occurred_at_idx")
 }
 
+model attendance_file_imports {
+  id               String   @id @db.Uuid
+  device_id        String   @db.Uuid
+  branch_id        String   @db.Uuid
+  file_name        String
+  content_hash     String
+  original_content String
+  report           Json
+  created_at       DateTime @default(now()) @db.Timestamptz(6)
+  devices          devices  @relation(fields: [device_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  branches         branches @relation(fields: [branch_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([device_id, content_hash], map: "attendance_file_imports_device_content_key")
+  @@index([device_id, created_at(sort: Desc)], map: "attendance_file_imports_device_created_idx")
+}
+
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model branch_assignments {
   id             String        @id @db.Uuid
@@ -124,6 +140,9 @@ model branch_policies {
 }
 
 model branches {
+  auth_account_branches auth_account_branches[]
+  leave_requests         leave_requests[]
+  attendance_file_imports attendance_file_imports[]
   id                     String                   @id @db.Uuid
   name                   String
   street                 String                   @default("")
@@ -166,6 +185,8 @@ model device_user_photos {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model device_users {
+  device_user_role_changes device_user_role_changes[]
+  role_observed_at DateTime? @db.Timestamptz(6)
   id                                                                                String                   @id @db.Uuid
   device_id                                                                         String                   @db.Uuid
   device_user_id                                                                    String
@@ -199,6 +220,9 @@ model device_users {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model devices {
+  device_user_role_changes device_user_role_changes[]
+  device_clock_adjustments device_clock_adjustments[]
+  attendance_file_imports attendance_file_imports[]
   id                    String               @id @db.Uuid
   name                  String
   ip_address            String
@@ -217,6 +241,33 @@ model devices {
   sync_runs             sync_runs[]
 
   @@unique([ip_address, tcp_port], map: "devices_active_endpoint_idx", where: raw("(deleted_at IS NULL)"))
+}
+
+model device_clock_adjustments {
+  id             String   @id @db.Uuid
+  device_id      String   @db.Uuid
+  time_zone      String
+  status         String   @default("running")
+  mode           String   @default("server")
+  requested_local_time String?
+  before_reading Json?
+  target         Json?
+  after_reading  Json?
+  error          String?
+  started_at     DateTime @default(now()) @db.Timestamptz(6)
+  completed_at   DateTime? @db.Timestamptz(6)
+  devices        devices  @relation(fields: [device_id], references: [id], onDelete: NoAction)
+
+  @@index([device_id, started_at(sort: Desc)], map: "device_clock_adjustments_device_started_idx")
+}
+
+model employee_clock_binding_imports {
+  id            String   @id @db.Uuid
+  source_name   String
+  source_hash   String
+  rows          Json
+  original_data Json
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
 }
 
 model employee_clock_events {
@@ -272,6 +323,17 @@ model employee_unification_snapshots {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model employees {
+  device_user_role_changes device_user_role_changes[]
+  whatsapp_conversations whatsapp_conversations[]
+  whatsapp_messages whatsapp_messages[]
+  leave_profile                 employee_leave_profiles? @relation("leaveProfileEmployee")
+  leave_reports                 employee_leave_profiles[] @relation("leaveProfileManager")
+  leave_requests                leave_requests[] @relation("leaveRequestEmployee")
+  managed_leave_requests        leave_requests[] @relation("leaveRequestManager")
+  resolved_leave_requests       leave_requests[] @relation("leaveRequestResolver")
+  vacation_movements            vacation_movements[]
+  leave_actions                 leave_request_events[] @relation("leaveEventActor")
+  leave_notifications           leave_request_events[] @relation("leaveEventRecipient")
   id                                                                        String                       @id @db.Uuid
   employee_number                                                           String?                      @unique
   normalized_employee_number                                                String?                      @unique
@@ -379,6 +441,7 @@ model employee_schedule_versions {
   recognition_margin_minutes Int       @default(30)
   meal_mode                  String?
   recognition_margin_inherited Boolean @default(false)
+  overtime_settings          Json      @default("{\"enabled\":false,\"workMode\":\"daily\",\"restEnabled\":false,\"dailyRest\":null,\"additionalRestMinutes\":0}")
   source_assignment_id       String?   @unique @db.Uuid
   source                     String    @default("manual")
   created_at                 DateTime  @default(now()) @db.Timestamptz(6)
@@ -395,4 +458,238 @@ model schedule_migration_snapshots {
   created_at  DateTime @default(now()) @db.Timestamptz(6)
 
   @@unique([source_type, source_id])
+}
+
+model employee_leave_profiles {
+  employee_id String @id @db.Uuid
+  manager_id String? @db.Uuid
+  whatsapp_phone String? @unique
+  vacation_balance Int @default(0)
+  version Int @default(1)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  employee employees @relation("leaveProfileEmployee", fields: [employee_id], references: [id])
+  manager employees? @relation("leaveProfileManager", fields: [manager_id], references: [id])
+}
+
+model leave_requests {
+  id String @id @db.Uuid
+  employee_id String @db.Uuid
+  manager_id String @db.Uuid
+  branch_id String @db.Uuid
+  kind String
+  from_date DateTime @db.Date
+  to_date DateTime @db.Date
+  authorized_time String?
+  paid Boolean
+  use_vacation Boolean
+  reason String
+  status String @default("pending")
+  details Json
+  source String @default("web")
+  source_key String? @unique
+  version Int @default(1)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  resolved_at DateTime? @db.Timestamptz(6)
+  resolved_by String? @db.Uuid
+  employee employees @relation("leaveRequestEmployee", fields: [employee_id], references: [id])
+  manager employees @relation("leaveRequestManager", fields: [manager_id], references: [id])
+  resolver employees? @relation("leaveRequestResolver", fields: [resolved_by], references: [id])
+  branch branches @relation(fields: [branch_id], references: [id])
+  vacation_movements vacation_movements[]
+  events leave_request_events[]
+  @@index([employee_id, from_date, to_date], map: "leave_requests_employee_dates_idx")
+  @@index([status, created_at(sort: Desc)], map: "leave_requests_status_created_idx")
+}
+
+model vacation_movements {
+  actor_account_id String? @db.Uuid
+  actor_account auth_accounts? @relation(fields: [actor_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id String @id @db.Uuid
+  employee_id String @db.Uuid
+  request_id String? @db.Uuid
+  kind String
+  days Int
+  balance_after Int
+  reason String
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  employee employees @relation(fields: [employee_id], references: [id])
+  request leave_requests? @relation(fields: [request_id], references: [id])
+  @@unique([request_id, kind])
+  @@index([employee_id, created_at(sort: Desc)], map: "vacation_movements_employee_created_idx")
+}
+
+model leave_request_events {
+  actor_account_id String? @db.Uuid
+  actor_account auth_accounts? @relation(fields: [actor_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id String @id @db.Uuid
+  request_id String @db.Uuid
+  kind String
+  actor_employee_id String? @db.Uuid
+  comments String @default("")
+  recipient_employee_id String @db.Uuid
+  recipient_phone String?
+  notification_status String @default("awaiting_configuration")
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  request leave_requests @relation(fields: [request_id], references: [id])
+  actor employees? @relation("leaveEventActor", fields: [actor_employee_id], references: [id])
+  recipient employees @relation("leaveEventRecipient", fields: [recipient_employee_id], references: [id])
+  @@index([request_id, created_at], map: "leave_request_events_request_created_idx")
+}
+
+model auth_accounts {
+  id String @id @db.Uuid
+  username String @unique
+  name String
+  password_hash String
+  role String
+  is_active Boolean @default(true)
+  must_change_password Boolean @default(true)
+  version Int @default(1)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  branches auth_account_branches[]
+  sessions auth_sessions[]
+  audit auth_audit_events[]
+  leave_events leave_request_events[]
+  vacation_movements vacation_movements[]
+}
+
+model auth_account_branches {
+  account_id String @db.Uuid
+  branch_id String @db.Uuid
+  account auth_accounts @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  branch branches @relation(fields: [branch_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@id([account_id,branch_id])
+}
+
+model auth_sessions {
+  token_hash String @id
+  account_id String @db.Uuid
+  csrf_token String
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  expires_at DateTime @db.Timestamptz(6)
+  revoked_at DateTime? @db.Timestamptz(6)
+  account auth_accounts @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@index([account_id],map: "auth_sessions_account_idx")
+  @@index([expires_at],map: "auth_sessions_expiry_idx")
+}
+
+model auth_audit_events {
+  id String @id @db.Uuid
+  account_id String? @db.Uuid
+  action String
+  target_id String? @db.Uuid
+  metadata Json @default("{}")
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  account auth_accounts? @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@index([account_id,created_at(sort: Desc)],map: "auth_audit_account_date_idx")
+}
+
+model whatsapp_conversations {
+  id String @id @db.Uuid
+  account_sid String
+  business_phone String
+  participant_phone String
+  employee_id String? @db.Uuid
+  last_inbound_at DateTime? @db.Timestamptz(6)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  employee employees? @relation(fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  messages whatsapp_messages[]
+  @@unique([account_sid, business_phone, participant_phone])
+}
+
+model whatsapp_messages {
+  id String @id @db.Uuid
+  sequence BigInt @unique @default(autoincrement())
+  conversation_id String @db.Uuid
+  account_sid String
+  employee_id String? @db.Uuid
+  direction String
+  content Json
+  attachments Json @default("[]")
+  state String
+  provider_message_id String?
+  idempotency_key String?
+  next_attempt_at DateTime @default(now()) @db.Timestamptz(6)
+  error_code String?
+  error_message String?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  conversation whatsapp_conversations @relation(fields: [conversation_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employee employees? @relation(fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  attempts whatsapp_attempts[]
+  inbox_job whatsapp_inbox_jobs?
+  @@unique([account_sid, provider_message_id])
+  @@unique([conversation_id, idempotency_key])
+  @@index([state, next_attempt_at, created_at], map: "whatsapp_messages_pending_idx")
+}
+
+model whatsapp_attempts {
+  id String @id @db.Uuid
+  message_id String @db.Uuid
+  number Int
+  state String
+  provider_message_id String?
+  provider_status String?
+  error_code String?
+  error_message String?
+  lease_until DateTime @db.Timestamptz(6)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  completed_at DateTime? @db.Timestamptz(6)
+  message whatsapp_messages @relation(fields: [message_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  events whatsapp_delivery_events[]
+  @@unique([message_id, number])
+  @@index([provider_message_id], map: "whatsapp_attempts_provider_idx")
+}
+
+model whatsapp_delivery_events {
+  id String @id @db.Uuid
+  account_sid String
+  business_phone String
+  participant_phone String
+  provider_message_id String
+  provider_status String
+  error_code String?
+  event_key String
+  correlation_attempt_id String? @db.Uuid
+  attempt_id String? @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  attempt whatsapp_attempts? @relation(fields: [attempt_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@unique([account_sid, event_key])
+  @@index([account_sid, provider_message_id, attempt_id], map: "whatsapp_delivery_events_unmatched_idx")
+}
+
+model whatsapp_inbox_jobs {
+  id String @id @db.Uuid
+  message_id String @unique @db.Uuid
+  state String @default("pending")
+  attempts Int @default(0)
+  lease_token String? @db.Uuid
+  lease_until DateTime? @db.Timestamptz(6)
+  next_attempt_at DateTime @default(now()) @db.Timestamptz(6)
+  error_code String?
+  error_message String?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  message whatsapp_messages @relation(fields: [message_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@index([state, next_attempt_at, created_at], map: "whatsapp_inbox_jobs_pending_idx")
+}
+
+model device_user_role_changes {
+  id String @id @db.Uuid
+  employee_id String @db.Uuid
+  clock_record_id String @db.Uuid
+  device_id String @db.Uuid
+  user_id String
+  requested_role Int
+  status String @default("running")
+  before_reading Json?
+  after_reading Json?
+  code String?
+  error String?
+  started_at DateTime @default(now()) @db.Timestamptz(6)
+  completed_at DateTime? @db.Timestamptz(6)
+  employee employees @relation(fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  clock_record device_users @relation(fields: [clock_record_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  device devices @relation(fields: [device_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@index([employee_id, started_at(sort: Desc)], map: "device_user_role_changes_employee_started_idx")
 }

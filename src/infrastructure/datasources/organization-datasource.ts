@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { Database, Queryable } from '../database/database.js';
 import type { AssignmentTargets, Branch, BranchInput, BranchPolicy, WorkSchedule } from '../../domain/entities/organization.js';
-import { workOnlyScheduleSettings } from '../../domain/entities/organization.js';
+import { preserveOvertimeMargins, workOnlyScheduleSettings } from '../../domain/entities/organization.js';
 import { ConfigurationError } from '../../domain/errors/app-error.js';
 import type { OrganizationDatasource } from '../../domain/datasources/persistence.js';
 import type { ScheduleAssignment } from '../../domain/repositories/organization-repository.js';
 import { PrismaEmployeeSchedulingDatasource } from './employee-scheduling-datasource.js';
+import { branchScopeSql } from '../security/access-context.js';
 
 const branchFields = `id, name, street, exterior_number AS "exteriorNumber", interior_number AS "interiorNumber",
   neighborhood, postal_code AS "postalCode", city, state, country, phone, email, manager_name AS "managerName",
@@ -34,7 +35,7 @@ export class PrismaOrganizationDatasource implements OrganizationDatasource {
   }
 
   async listBranches(): Promise<Branch[]> {
-    return (await this.database.query<Branch>(`SELECT ${branchFields} FROM branches ORDER BY name`)).rows;
+    return (await this.database.query<Branch>(`SELECT ${branchFields} FROM branches WHERE (${branchScopeSql('id')}) ORDER BY name`)).rows;
   }
 
   async saveBranch(input: BranchInput, id?: string): Promise<Branch | undefined> {
@@ -49,21 +50,25 @@ export class PrismaOrganizationDatasource implements OrganizationDatasource {
 
   async listPolicies(): Promise<BranchPolicy[]> {
     return (await this.database.query<BranchPolicy>(`SELECT id, branch_id AS "branchId", effective_from::text AS "effectiveFrom", settings, created_at AS "createdAt", superseded_from::text AS "supersededFrom"
-      FROM branch_policies WHERE deleted_at IS NULL ORDER BY effective_from DESC, created_at DESC`)).rows;
+      FROM branch_policies WHERE (${branchScopeSql('branch_id')}) AND deleted_at IS NULL ORDER BY effective_from DESC, created_at DESC`)).rows;
   }
 
   async addPolicy(branchId: string, input: Omit<BranchPolicy, 'id' | 'branchId'>): Promise<BranchPolicy> {
     return this.database.transaction(async (client) => {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))::text', [`branch-schedule:${branchId}`]);
+      const previous = (await client.query<Pick<BranchPolicy, 'settings'>>(`SELECT settings FROM branch_policies
+        WHERE branch_id=$1 AND effective_from<=$2::date AND deleted_at IS NULL
+        AND (superseded_from IS NULL OR $2::date<superseded_from) ORDER BY effective_from DESC,created_at DESC,id DESC LIMIT 1`, [branchId, input.effectiveFrom])).rows[0];
+      const settings = preserveOvertimeMargins(input.settings, previous?.settings);
       return (await client.query<BranchPolicy>(`INSERT INTO branch_policies (id, branch_id, effective_from, settings)
         VALUES ($1, $2, $3, $4) RETURNING id, branch_id AS "branchId", effective_from::text AS "effectiveFrom", settings`,
-      [randomUUID(), branchId, input.effectiveFrom, JSON.stringify(input.settings)])).rows[0];
+      [randomUUID(), branchId, input.effectiveFrom, JSON.stringify(settings)])).rows[0];
     });
   }
 
   async listSchedules(): Promise<WorkSchedule[]> {
     return (await this.database.query<WorkSchedule>(`SELECT id, branch_id AS "branchId", name, effective_from::text AS "effectiveFrom",
-      is_default AS "isDefault", settings, created_at AS "createdAt", superseded_from::text AS "supersededFrom" FROM work_schedules WHERE deleted_at IS NULL ORDER BY effective_from DESC, created_at DESC`)).rows;
+      is_default AS "isDefault", settings, created_at AS "createdAt", superseded_from::text AS "supersededFrom" FROM work_schedules WHERE (${branchScopeSql('branch_id')}) AND deleted_at IS NULL ORDER BY effective_from DESC, created_at DESC`)).rows;
   }
 
   async addSchedule(input: Omit<WorkSchedule, 'id'>): Promise<WorkSchedule> {
@@ -81,7 +86,9 @@ export class PrismaOrganizationDatasource implements OrganizationDatasource {
 
   async listAssignments() {
     return (await this.database.query<ScheduleAssignment>(`SELECT id, employee_id AS "employeeId", device_user_id AS "deviceUserId",
-      schedule_id AS "scheduleId", effective_from::text AS "effectiveFrom" FROM schedule_assignments WHERE employee_id IS NOT NULL ORDER BY effective_from DESC`)).rows;
+      schedule_id AS "scheduleId", effective_from::text AS "effectiveFrom" FROM schedule_assignments WHERE employee_id IS NOT NULL
+      AND employee_id IN (SELECT id FROM employees WHERE ${branchScopeSql('branch_id')})
+      AND (schedule_id IS NULL OR schedule_id IN (SELECT id FROM work_schedules WHERE ${branchScopeSql('branch_id')})) ORDER BY effective_from DESC`)).rows;
   }
 
   async assignSchedule(scheduleId: string, targets: AssignmentTargets): Promise<void> {
@@ -131,6 +138,7 @@ export class PrismaOrganizationDatasource implements OrganizationDatasource {
             meal: context.version?.meal ?? null,
             mealMode: context.version?.mealMode ?? 'inherit',
             recognitionMarginInherited: context.version?.recognitionMarginInherited ?? true,
+            overtime: context.version?.overtime,
             recognitionMarginMinutes: context.version?.recognitionMarginMinutes ?? role?.settings.recognitionMarginMinutes ?? 30,
           });
         }

@@ -4,6 +4,7 @@ import { normalizeEmployeeNumber, type Employee, type EmployeeClockRecord, type 
 import { getUpdatedProfileName } from '../../domain/entities/personal-profile.js';
 import { EmployeeLifecycle } from './employee-lifecycle.js';
 import type { EmployeeDatasource } from '../../domain/datasources/persistence.js';
+import { branchScopeSql } from '../security/access-context.js';
 
 export type EmployeeRow = {
   id: string;
@@ -38,25 +39,26 @@ export type EmployeeRow = {
 
 const statusExpression = `CASE WHEN is_active THEN 'active' ELSE 'inactive' END`;
 
-export const employeeSelectColumns = `id, employee_number, normalized_employee_number, name, first_name, last_name, position, rfc, imss,
+export function employeeSelectColumns() { return `id, employee_number, normalized_employee_number, name, first_name, last_name, position, rfc, imss,
   management_code, section_code, company_code, branch_code, schedule_type_code, hire_date::text AS hire_date,
   termination_date::text AS termination_date, ${statusExpression} AS employment_status, created_at, updated_at, branch_id,
   (SELECT name FROM branches WHERE id = employees.branch_id) AS branch_name,
   identification_status, merged_into_id, is_active, original_name, name_split_method,
   (SELECT jsonb_build_object('versionId', v.id, 'effectiveFrom', v.effective_from::text, 'workHours', v.work_hours,
     'meal', v.meal, 'recognitionMarginMinutes', v.recognition_margin_minutes,
-    'mealMode', COALESCE(v.meal_mode, CASE WHEN v.meal IS NULL THEN 'automatic' ELSE 'individual' END), 'recognitionMarginInherited', v.recognition_margin_inherited)
+    'mealMode', COALESCE(v.meal_mode, CASE WHEN v.meal IS NULL THEN 'automatic' ELSE 'individual' END), 'recognitionMarginInherited', v.recognition_margin_inherited,
+    'overtime', v.overtime_settings)
     FROM employee_schedule_versions v WHERE v.employee_id=employees.id
       AND v.effective_from <= (NOW() AT TIME ZONE COALESCE((SELECT time_zone FROM branches WHERE id=employees.branch_id),'America/Mexico_City'))::date
     ORDER BY v.effective_from DESC,v.created_at DESC,v.id DESC LIMIT 1) AS scheduling,
   COALESCE((SELECT jsonb_agg(jsonb_build_object(
-    'id', u.id, 'deviceId', u.device_id, 'userId', u.device_user_id, 'name', u.name, 'deviceName', d.name,
+    'id', u.id, 'deviceId', u.device_id, 'userId', u.device_user_id, 'uid', u.uid, 'roleObservedAt', u.role_observed_at, 'name', u.name, 'deviceName', d.name,
     'branchId', d.branch_id, 'bindingStatus', u.binding_status, 'syncedAt', u.synced_at,
     'cardNumber', u.card_number, 'role', u.role,
     'hasPhoto', EXISTS (SELECT 1 FROM device_user_photos p WHERE p.device_id = u.device_id AND p.device_user_id = u.device_user_id),
     'originalProfile', jsonb_build_object('firstName', u.first_name, 'lastName', u.last_name, 'displayName', u.display_name, 'rfc', u.rfc, 'socialSecurityNumber', u.imss, 'rawData', u.raw_data)
   ) ORDER BY (u.binding_status = 'active') DESC, u.synced_at DESC)
-  FROM device_users u JOIN devices d ON d.id = u.device_id WHERE u.employee_id = employees.id), '[]'::jsonb) AS clock_records`;
+   FROM device_users u JOIN devices d ON d.id = u.device_id WHERE u.employee_id = employees.id AND (${branchScopeSql('d.branch_id')})), '[]'::jsonb) AS clock_records`; }
 
 export const mapEmployeeRow = (row: EmployeeRow): Employee => ({
   id: row.id,
@@ -93,7 +95,7 @@ export class PrismaEmployeeDatasource implements EmployeeDatasource {
   constructor(private readonly database: Queryable) {}
 
   async findById(id: string): Promise<Employee | undefined> {
-    const row = (await this.database.query<EmployeeRow>(`SELECT ${employeeSelectColumns} FROM employees WHERE id = $1`, [id])).rows[0];
+    const row = (await this.database.query<EmployeeRow>(`SELECT ${employeeSelectColumns()} FROM employees WHERE id = $1`, [id])).rows[0];
     return row ? mapEmployeeRow(row) : undefined;
   }
 
@@ -163,8 +165,8 @@ export class PrismaEmployeeDatasource implements EmployeeDatasource {
     limit: number;
   }): Promise<Employee[]> {
     const result = await this.database.query<EmployeeRow>(
-      `SELECT ${employeeSelectColumns} FROM employees
-       WHERE ($1::text IS NULL OR employee_number ILIKE '%' || $1 || '%'
+      `SELECT ${employeeSelectColumns()} FROM employees
+        WHERE (${branchScopeSql('branch_id')}) AND ($1::text IS NULL OR employee_number ILIKE '%' || $1 || '%'
          OR normalized_employee_number ILIKE '%' || $1 || '%'
          OR name ILIKE '%' || $1 || '%' OR position ILIKE '%' || $1 || '%'
          OR rfc ILIKE '%' || $1 || '%' OR imss ILIKE '%' || $1 || '%')

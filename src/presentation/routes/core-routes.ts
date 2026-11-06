@@ -16,6 +16,10 @@ export function registerCoreRoutes(app: FastifyInstance, services: ApplicationSe
   app.patch('/devices/:id', { schema: { tags: ['devices'] } }, devices.update);
   app.delete('/devices/:id', { schema: { tags: ['devices'] } }, devices.remove);
   app.post('/devices/:id/test-connection', { schema: { tags: ['devices'] } }, devices.testConnection);
+  app.get('/devices/:id/clock-time', { schema: { tags: ['devices'] } }, devices.clockTime);
+  app.post('/devices/:id/clock-time/synchronize', { schema: { tags: ['devices'] } }, devices.synchronizeClockTime);
+  app.post('/devices/:id/clock-time/manual', { schema: { tags: ['devices'] } }, devices.setManualClockTime);
+  app.get('/devices/:id/clock-time/history', { schema: { tags: ['devices'] } }, devices.clockHistory);
   app.post('/devices/:id/sync-attendance', { schema: { tags: ['attendance'] } }, devices.syncAttendance);
   app.post('/devices/:id/sync-users', { schema: { tags: ['users'] } }, devices.syncUsers);
   app.post('/devices/:id/sync-user-photos', { schema: { tags: ['users'] } }, devices.syncPhotos);

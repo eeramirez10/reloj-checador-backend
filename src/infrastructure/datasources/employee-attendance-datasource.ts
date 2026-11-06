@@ -3,6 +3,9 @@ import type { EmployeeAttendanceHistory } from '../../domain/repositories/employ
 import type { AttendancePeriod } from '../../domain/entities/employee-attendance.js';
 import type { Database, Queryable } from '../database/database.js';
 import { scheduleVersionColumns } from './employee-scheduling-datasource.js';
+import { leaveRequestColumns } from './leave-columns.js';
+import type { LeaveRequest } from '../../domain/entities/leave.js';
+import { assertAttendanceHistoryAccess } from '../security/attendance-history-access.js';
 
 export class PrismaEmployeeAttendanceDatasource implements EmployeeAttendanceDatasource {
   constructor(private readonly database: Database) {}
@@ -10,6 +13,7 @@ export class PrismaEmployeeAttendanceDatasource implements EmployeeAttendanceDat
   history(employeeId: string, period: AttendancePeriod): Promise<EmployeeAttendanceHistory> {
     return this.database.transaction(async (client) => {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+      await assertAttendanceHistoryAccess(client, [employeeId], period);
       return (await loadEmployeeAttendanceHistories(client, [employeeId], period)).get(employeeId)!;
     });
   }
@@ -32,7 +36,10 @@ export async function loadEmployeeAttendanceHistories(client: Queryable, employe
   const evaluations = (await client.query<EmployeeAttendanceHistory['evaluations'][number] & { employeeId: string }>(`SELECT subject_id AS "employeeId", date::text,
     branch_id AS "branchId", result FROM attendance_evaluations WHERE subject_id=ANY($1::uuid[]) AND active
     AND date BETWEEN $2::date AND $3::date ORDER BY date`, [employeeIds, period.from, period.to])).rows;
-  for (const id of employeeIds) histories.set(id, { branches, schedules, branchAssignments: [], assignments: [], employeeSchedules: [], evaluations: [] });
+  const leaves = (await client.query<LeaveRequest>(`SELECT ${leaveRequestColumns} FROM leave_requests WHERE employee_id=ANY($1::uuid[])
+    AND status='approved' AND from_date <= $3::date AND to_date >= $2::date`, [employeeIds, period.from, period.to])).rows;
+  for (const id of employeeIds) histories.set(id, { branches, schedules, branchAssignments: [], assignments: [], employeeSchedules: [], evaluations: [], approvedLeaves: [] });
+  for (const request of leaves) histories.get(request.employeeId)!.approvedLeaves!.push(request);
   for (const { employeeId, ...assignment } of branchAssignments) histories.get(employeeId)!.branchAssignments.push(assignment);
   for (const { employeeId, ...assignment } of assignments) histories.get(employeeId)!.assignments.push(assignment);
   for (const version of employeeSchedules) histories.get(version.employeeId)!.employeeSchedules.push(version);

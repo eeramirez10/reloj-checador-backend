@@ -1,5 +1,6 @@
 import type { ScheduleSettings, WorkSchedule } from './organization.js';
 import { ConfigurationError } from '../errors/app-error.js';
+import type { OvertimeSettings } from './overtime.js';
 
 export interface WorkHours { workDays: number[]; entryTime: string; exitTime: string }
 export interface MealSettings { enabled: boolean; startTime: string; endTime: string; durationMinutes: number }
@@ -9,6 +10,7 @@ export interface EmployeeScheduleSettings {
   mealMode?: 'inherit' | 'automatic' | 'individual';
   recognitionMarginMinutes: number;
   recognitionMarginInherited?: boolean;
+  overtime?: OvertimeSettings;
 }
 export interface EmployeeScheduleInput extends EmployeeScheduleSettings {
   effectiveFrom: string;
@@ -74,6 +76,7 @@ export function validateEmployeeScheduling(input: EmployeeScheduleInput, base?: 
   if (input.workHours && (input.workHours.entryTime >= input.workHours.exitTime || !input.workHours.workDays.length)) {
     throw new ConfigurationError('La jornada individual debe tener días laborables y una salida posterior a la entrada.');
   }
+  if (input.overtime?.enabled && input.overtime.workMode === 'route') return;
   if (input.meal?.enabled) {
     if (!hours) throw new ConfigurationError('Configura la jornada de la sucursal o una jornada individual antes de asignar comida.');
     const meal = input.meal;

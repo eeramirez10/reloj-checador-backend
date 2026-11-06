@@ -5,6 +5,8 @@ import type { Device } from '../../../domain/entities/device.js';
 import type { DeviceInfo, ZktecoAttendanceEvent, ZktecoDeviceClient, ZktecoUser } from '../../../domain/datasources/device-client.js';
 import { ExternalServiceError } from '../../../domain/errors/app-error.js';
 import { isWorkerResponse, type DeviceOperation, type ZktecoWorkerRequest, type ZktecoWorkerResponse } from './worker-protocol.js';
+import type { ClockTimeReading, ClockTimeTarget } from '../../../domain/entities/device-clock.js';
+import type { DeviceUserRoleInput, DeviceUserRoleResult, DeviceUserRoleSnapshot, DeviceUserRoleTarget } from '../../../domain/entities/device-user-role.js';
 
 interface WorkerOptions { workerPath?: URL; operationTimeoutMs?: number; startupTimeoutMs?: number }
 
@@ -26,10 +28,14 @@ export class NodeZkLibClient implements ZktecoDeviceClient {
   testConnection(device: Device): Promise<DeviceInfo> { return this.execute('testConnection', device); }
   getAttendance(device: Device): Promise<ZktecoAttendanceEvent[]> { return this.execute('getAttendance', device); }
   getUsers(device: Device): Promise<ZktecoUser[]> { return this.execute('getUsers', device); }
+  getClockTime(device: Device): Promise<ClockTimeReading> { return this.execute('getClockTime', device); }
+  setClockTime(device: Device, localTime?: string): Promise<ClockTimeTarget> { return this.execute('setClockTime', device, localTime); }
+  getUserRole(device: Device, target: DeviceUserRoleTarget): Promise<DeviceUserRoleSnapshot> { return this.execute('getUserRole',device,undefined,target); }
+  setUserRole(device: Device, input: DeviceUserRoleInput): Promise<DeviceUserRoleResult> { return this.execute('setUserRole',device,undefined,input); }
 
-  private async execute<T>(operation: DeviceOperation, device: Device): Promise<T> {
+  private async execute<T>(operation: DeviceOperation, device: Device, localTime?: string, roleTarget?: DeviceUserRoleTarget | DeviceUserRoleInput): Promise<T> {
     try {
-      return await this.runWorker<T>({ operation, device, timeoutMs: this.timeoutMs, operationTimeoutMs: this.operationTimeoutMs, inPort: this.inPort });
+      return await this.runWorker<T>({ operation, device, localTime, roleTarget, timeoutMs: this.timeoutMs, operationTimeoutMs: this.operationTimeoutMs, inPort: this.inPort });
     } catch (error) {
       if (error instanceof ExternalServiceError) throw error;
       throw new ExternalServiceError(`No se pudo iniciar el controlador de ${device.name}.`, 'EXTERNAL_SERVICE_ERROR', { cause: error });

@@ -9,7 +9,8 @@ export function persistenceError(error: unknown): AppError | undefined {
   const detail = `${constraint} ${metadata}`;
   if (code === 'P2002' || code === '23505' || (code === 'P2010' && detail.includes('23505'))) {
     const message = /devices_active_endpoint_idx|ip_address/.test(detail) ? 'Ya existe un reloj con esa dirección IP y puerto.'
-      : /device_users_active_employee_idx/.test(detail) ? 'El empleado ya tiene un reloj actual asignado.' : 'Ya existe un registro con esos datos.';
+      : /device_users_active_employee_idx/.test(detail) ? 'El empleado ya tiene un reloj actual asignado.'
+      : /employee_leave_profiles_whatsapp_phone_key/.test(detail) ? 'El número de WhatsApp ya está asignado a otro empleado.' : 'Ya existe un registro con esos datos.';
     return new ConflictError(message, { cause: error });
   }
   if (code === 'P2003' || code === '23503' || (code === 'P2010' && detail.includes('23503'))) {

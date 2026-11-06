@@ -2,8 +2,10 @@ import type { AttendancePeriod } from '../entities/employee-attendance.js';
 import type { EmployeeScheduleVersion } from '../entities/employee-scheduling.js';
 import type { Branch, WorkSchedule } from '../entities/organization.js';
 import type { DailyEvaluation } from '../entities/schedule-evaluator.js';
+import type { LeaveRequest } from '../entities/leave.js';
 
 export interface EmployeeAttendanceHistory {
+  approvedLeaves?: LeaveRequest[];
   branches: Array<Pick<Branch, 'id' | 'name' | 'timeZone'>>;
   branchAssignments: Array<{ branchId: string; effectiveFrom: string }>;
   schedules: WorkSchedule[];

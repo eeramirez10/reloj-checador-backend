@@ -3,11 +3,16 @@ import type { ApplicationServices } from '../services.js';
 import { EmployeeController } from '../controllers/employee-controller.js';
 import { OrganizationController } from '../controllers/organization-controller.js';
 import { AttendanceController } from '../controllers/attendance-controller.js';
+import { AttendanceFileController } from '../controllers/attendance-file-controller.js';
 
 export function registerOrganizationRoutes(app: FastifyInstance, services: ApplicationServices): void {
   const employees = new EmployeeController(services);
   const organization = new OrganizationController(services);
   const attendance = new AttendanceController(services);
+  const files = new AttendanceFileController(services.attendanceFile);
+  app.post('/attendance/imports/preview', { bodyLimit: 2_000_000 }, files.preview);
+  app.post('/attendance/imports', { bodyLimit: 2_000_000 }, files.import);
+  app.get('/attendance/imports', files.history);
   app.get('/employees/:id', employees.find);
   app.post('/employees', employees.create);
   app.post('/employees/:id/identify', employees.identify);
@@ -36,6 +41,8 @@ export function registerOrganizationRoutes(app: FastifyInstance, services: Appli
   app.get('/attendance/daily', attendance.daily);
   app.get('/attendance/cards', attendance.cards);
   app.get('/attendance/cards/export', attendance.exportCards);
+  app.get('/attendance/overtime', attendance.overtime);
+  app.get('/attendance/overtime/export', attendance.exportOvertime);
   app.get('/attendance/deductions', attendance.deductions);
   app.post('/attendance/recalculate', attendance.recalculate);
 }

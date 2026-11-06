@@ -27,6 +27,12 @@ export class DeviceRepositoryImpl implements DeviceRepository {
 export class AttendanceRepositoryImpl implements AttendanceRepository {
   constructor(private readonly datasource: AttendanceDatasource) {}
   insertIfNew(deviceId: string, event: ZktecoAttendanceEvent) { return this.datasource.insertIfNew(deviceId, event); }
+  async insertBatchIfNew(deviceId: string, events: ZktecoAttendanceEvent[]) {
+    if (this.datasource.insertBatchIfNew) return this.datasource.insertBatchIfNew(deviceId, events);
+    let inserted = 0;
+    for (const event of events) if (await this.datasource.insertIfNew(deviceId, event)) inserted++;
+    return inserted;
+  }
   list(filters: AttendanceFilters) { return this.datasource.list(filters); }
 }
 

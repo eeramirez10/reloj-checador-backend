@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildApp } from '../src/main.js';
+import { buildApp } from './helpers/build-test-app.js';
 import { Database } from '../src/infrastructure/database/database.js';
 import { runMigrations } from '../src/infrastructure/database/legacy-migrations.js';
 import type { EmployeeScheduleInput } from '../src/domain/entities/employee-scheduling.js';

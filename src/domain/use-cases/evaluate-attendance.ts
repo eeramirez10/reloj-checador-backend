@@ -1,48 +1,31 @@
-import type { EvaluationBranch, EvaluationRepository, SubjectLog } from '../repositories/evaluation-repository.js';
+import type { EvaluationRepository, EvaluationSession, SubjectLog } from '../repositories/evaluation-repository.js';
 import type { ReportFilters } from '../dtos/filters.js';
-import { formatDateTimeInTimeZone } from '../entities/attendance-summary.js';
-import { accumulateIncidents, evaluateDay, type CountedIncident, type DailyEvaluation } from '../entities/schedule-evaluator.js';
-import { effectiveVersion, resolveEmployeeSchedule } from '../entities/employee-scheduling.js';
+import { accumulateIncidents, type CountedIncident } from '../entities/schedule-evaluator.js';
+import { evaluateSubjectAttendance } from './evaluate-subject-attendance.js';
 
 export class AttendanceEvaluationService {
   constructor(private readonly repository: EvaluationRepository) {}
 
   async recalculate(): Promise<{ evaluatedDays: number; deductions: number }> {
-    return this.repository.transaction(async (session) => {
+    return this.repository.transaction((session) => this.evaluate(session));
+  }
+
+  async evaluate(session: EvaluationSession): Promise<{ evaluatedDays: number; deductions: number }> {
       const snapshot = await session.snapshot();
-      const branches = new Map(snapshot.branches.map((branch) => [branch.id, branch]));
-      const schedules = new Map(snapshot.schedules.map((schedule) => [schedule.id, schedule]));
-      const groups = new Map<string, { date: string; branch?: EvaluationBranch; logs: SubjectLog[] }>();
+      const subjects = new Map<string, SubjectLog[]>();
       for (const log of snapshot.logs) {
-        const history = snapshot.branchAssignments.filter((assignment) => assignment.targetId === log.subjectId);
-        const currentAssignment = history.filter((assignment) => assignment.effectiveFrom <= formatDateTimeInTimeZone(log.occurredAt,
-          branches.get(assignment.branchId)?.timeZone ?? 'America/Mexico_City').slice(0, 10))
-          .sort((left, right) => right.effectiveFrom.localeCompare(left.effectiveFrom))[0];
-        const branchId = history.length ? currentAssignment?.branchId : log.branchId;
-        const branch = branches.get(branchId ?? '');
-        const date = formatDateTimeInTimeZone(log.occurredAt, branch?.timeZone ?? 'America/Mexico_City').slice(0, 10);
-        const key = `${log.subjectId}:${date}`;
-        const group = groups.get(key) ?? { date, branch, logs: [] };
-        group.logs.push(log);
-        groups.set(key, group);
+        const logs = subjects.get(log.subjectId) ?? [];
+        logs.push(log); subjects.set(log.subjectId,logs);
       }
+      for (const subject of snapshot.leaveSubjects ?? []) if (!subjects.has(subject.subjectId)) subjects.set(subject.subjectId, []);
       const activeIncidentIds: string[] = [];
       const incidentsBySubject = new Map<string, CountedIncident[]>();
       const evaluations: Array<{ id: string; subjectId: string; date: string }> = [];
-      for (const group of groups.values()) {
-        const first = group.logs[0];
-        const policy = effectiveVersion(snapshot.policies.filter((item) => item.branchId === group.branch?.id), group.date);
-        const assignment = effectiveVersion(snapshot.assignments.filter((item) => first.employeeId
-          ? item.employeeId === first.employeeId : item.deviceUserId === first.deviceUserId), group.date);
-        const assigned = assignment?.scheduleId ? schedules.get(assignment.scheduleId) : undefined;
-        const base = effectiveVersion(snapshot.schedules.filter((item) => item.branchId === group.branch?.id && item.isDefault), group.date);
-        const individual = effectiveVersion(snapshot.employeeSchedules.filter((item) => item.employeeId === first.subjectId), group.date);
-        const schedule = resolveEmployeeSchedule(base, assigned && assigned.effectiveFrom <= group.date ? assigned : undefined, individual);
+      for (const [subjectId, logs] of subjects) for (const group of evaluateSubjectAttendance(logs,snapshot,new Date(),snapshot.leaveSubjects?.find((subject) => subject.subjectId === subjectId))) {
+        const first = group.subject;
+        const { policy, schedule, daily } = group;
         const zone = group.branch?.timeZone ?? 'America/Mexico_City';
-        const daily: DailyEvaluation = schedule ? evaluateDay(group.date, group.logs, schedule.settings, policy?.settings, zone)
-          : { date: group.date, status: 'unconfigured', punches: group.logs.map((log) => ({ id: log.id, occurredAt: log.occurredAt.toISOString(), localTime: formatDateTimeInTimeZone(log.occurredAt, zone), movement: 'unclassified' })),
-            issues: ['Asigna una jornada laboral de sucursal o individual vigente para identificar esta jornada.'], incidents: [] };
-        const result = { ...daily, name: first.name, employeeNumber: first.employeeNumber, userIds: [...new Set(group.logs.map((log) => log.userId))],
+        const result = { ...daily, name: first.name, employeeNumber: first.employeeNumber, userIds: [...new Set((group.logs.length ? group.logs.map((log) => log.userId) : [first.userId]).filter(Boolean))],
           branchName: group.branch?.name, scheduleName: schedule?.scheduleName, timeZone: zone, policy: policy?.settings,
           scheduleSource: schedule?.source, scheduleSettings: schedule?.settings, schedulingVersionId: schedule?.versionId,
           mealConfigured: schedule ? schedule.settings.mealDetection === 'configured' || schedule.settings.mealDetection === 'disabled' : false,
@@ -75,7 +58,6 @@ export class AttendanceEvaluationService {
       }
       await session.reconcile(activeIncidentIds, activeDeductionIds, evaluations.map((evaluation) => evaluation.id));
       return { evaluatedDays: evaluations.length, deductions: activeDeductionIds.length };
-    });
   }
 
   report(filters: ReportFilters) {

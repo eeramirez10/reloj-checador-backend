@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { resolveEmployeeSchedule, type EmployeeScheduleVersion } from '../src/domain/entities/employee-scheduling.js';
 import type { WorkSchedule } from '../src/domain/entities/organization.js';
 import { branchConfigurationSchema } from '../src/presentation/validators/branch-configuration.js';
+import { policySettingsSchema } from '../src/presentation/validators/organization.js';
+import { preserveOvertimeMargins } from '../src/domain/entities/organization.js';
 
 const base: WorkSchedule = { id: 'base', branchId: 'branch', name: 'Base', effectiveFrom: '2025-01-01', isDefault: true,
   settings: { workDays: [1,2,3,4,5], entryTime: '08:30', exitTime: '17:30', mealEnabled: false, mealStart: '00:00',
@@ -11,6 +13,18 @@ const personal: EmployeeScheduleVersion = { id: 'person', employeeId: 'employee'
   source: 'manual', workHours: null, meal: null, recognitionMarginMinutes: 30 };
 
 describe('unified branch meal inheritance', () => {
+  it('validates independent overtime margins and preserves them when legacy requests omit the fields', () => {
+    const policy = { entryToleranceMinutes: 15, mealToleranceMinutes: 15, entryAllowedTardies: 3, mealAllowedTardies: 3,
+      accumulationMode: 'first_lateness' as const, accumulationDays: 30 };
+    expect(policySettingsSchema.parse({ ...policy, overtimeEntryMarginMinutes: 30, overtimeExitMarginMinutes: 45 })).toMatchObject({ overtimeEntryMarginMinutes: 30, overtimeExitMarginMinutes: 45 });
+    for (const value of [-1, 241, 0.5, '30', null]) {
+      expect(policySettingsSchema.safeParse({ ...policy, overtimeEntryMarginMinutes: value }).success).toBe(false);
+      expect(policySettingsSchema.safeParse({ ...policy, overtimeExitMarginMinutes: value }).success).toBe(false);
+    }
+    const previous = { ...policy, overtimeEntryMarginMinutes: 30, overtimeExitMarginMinutes: 45 };
+    expect(preserveOvertimeMargins(policy, previous)).toMatchObject({ overtimeEntryMarginMinutes: 30, overtimeExitMarginMinutes: 45 });
+    expect(preserveOvertimeMargins({ ...policy, overtimeExitMarginMinutes: 0 }, previous)).toMatchObject({ overtimeEntryMarginMinutes: 30, overtimeExitMarginMinutes: 0 });
+  });
   it('inherits branch meal and recognition settings when there is no personal override', () => {
     expect(resolveEmployeeSchedule(base, undefined, undefined)?.settings).toMatchObject({ mealDetection: 'configured', mealSource: 'branch', mealStart: '13:30', recognitionMarginMinutes: 45 });
     expect(resolveEmployeeSchedule(base, undefined, { ...personal, mealMode: 'inherit', recognitionMarginInherited: true })?.settings)

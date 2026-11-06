@@ -32,6 +32,19 @@ describe('NodeZkLibClient', () => {
     await failure;
     expect(disconnect).toHaveBeenCalledOnce();
   });
+
+  it('bounds a stalled connection separately from a longer operation and never runs commands after a late connect', async () => {
+    vi.useFakeTimers();
+    let connected!: () => void;
+    vi.spyOn(ZKLib.prototype, 'createSocket').mockImplementation(() => new Promise<void>((resolve) => { connected = resolve; }));
+    const info = vi.spyOn(ZKLib.prototype, 'getInfo');
+    const disconnect = vi.spyOn(ZKLib.prototype, 'disconnect').mockResolvedValue();
+    const result = new NodeZkLibClient(1_000,5_200,10_000).testConnection({ name: 'Veracruz',ipAddress: '192.168.2.201',tcpPort: 4370 } as Device);
+    const failure = expect(result).rejects.toMatchObject({ code: 'EXTERNAL_SERVICE_TIMEOUT',message: expect.stringContaining('Veracruz (192.168.2.201:4370)') });
+    await vi.advanceTimersByTimeAsync(1_000); await failure;
+    connected(); await vi.advanceTimersByTimeAsync(0);
+    expect(info).not.toHaveBeenCalled(); expect(disconnect).toHaveBeenCalledOnce();
+  });
   it('decodes verification and attendance state from TCP records', () => {
     const packet = Buffer.alloc(40);
     packet.writeUInt16LE(15_645, 0);

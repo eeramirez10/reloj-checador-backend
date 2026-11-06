@@ -4,6 +4,10 @@ import type { DeviceInfo, ZktecoAttendanceEvent, ZktecoDeviceClient, ZktecoUser 
 import { dateAtLocalTime } from '../../../domain/entities/schedule-evaluator.js';
 import { ExternalServiceError, errorMessage } from '../../../domain/errors/app-error.js';
 import { withTimeout } from '../with-timeout.js';
+import { formatDateTimeInTimeZone } from '../../../domain/entities/attendance-summary.js';
+import { clockCommandPayload, clockCommands, decodeClockTime, encodeClockTime } from './clock-time-codec.js';
+import type { DeviceUserRoleInput, DeviceUserRoleTarget } from '../../../domain/entities/device-user-role.js';
+import { changeDeviceUserRole,readDeviceUserRole } from './user-role-client.js';
 
 function getDeviceLocalTime(value: Date): { date: string; time: string; localTime: string } {
   const pad = (part: number) => String(part).padStart(2, '0');
@@ -40,6 +44,29 @@ type RawUser = {
 
 export class DirectNodeZkLibClient implements ZktecoDeviceClient {
   constructor(private readonly timeoutMs: number, private readonly inPort: number, private readonly operationTimeoutMs = timeoutMs) {}
+
+  getUserRole(device: Device, target: DeviceUserRoleTarget) { return this.withClient(device,(client) => readDeviceUserRole(client,target)); }
+  setUserRole(device: Device, input: DeviceUserRoleInput) { return this.withClient(device,(client) => changeDeviceUserRole(client,input)); }
+
+  async getClockTime(device: Device) {
+    return this.withClient(device, async (client) => {
+      const startedAt = Date.now();
+      const response = await client.executeCmd(clockCommands.read);
+      const measuredAt = new Date(Math.round((startedAt + Date.now()) / 2)).toISOString();
+      return { localTime: decodeClockTime(clockCommandPayload(response)), measuredAt };
+    });
+  }
+
+  async setClockTime(device: Device, manualLocalTime?: string) {
+    if (!device.timeZone) throw new ExternalServiceError('El reloj no tiene una zona horaria de sucursal.');
+    return this.withClient(device, async (client) => {
+      // La hora se calcula después de conectar, no antes de arrancar el proceso aislado.
+      const sentAt = new Date().toISOString();
+      const localTime = manualLocalTime ?? formatDateTimeInTimeZone(new Date(sentAt), device.timeZone!);
+      clockCommandPayload(await client.executeCmd(clockCommands.write, encodeClockTime(localTime)));
+      return { localTime, sentAt };
+    });
+  }
 
   async testConnection(device: Device): Promise<DeviceInfo> {
     return this.withClient(device, async (client) => {
@@ -118,7 +145,8 @@ export class DirectNodeZkLibClient implements ZktecoDeviceClient {
     const client = new ZKLib(device.ipAddress, device.tcpPort, this.timeoutMs, this.inPort);
     try {
       return await withTimeout((async () => {
-        await client.createSocket();
+        await withTimeout(client.createSocket(), this.timeoutMs,
+          `Tiempo de conexión agotado con ${device.name} (${device.ipAddress}:${device.tcpPort}) después de ${this.timeoutMs / 1000} s. El equipo no respondió; revisa el túnel, la ruta y el puerto.`);
         return callback(client);
       })(), this.operationTimeoutMs, `Se agotó el tiempo de comunicación con ${device.name}.`);
     } catch (error) {

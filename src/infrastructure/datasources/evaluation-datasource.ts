@@ -8,8 +8,16 @@ import type { Database, Queryable } from '../database/database.js';
 import type { Prisma } from '../database/generated/client.js';
 import type { EmployeeScheduleVersion } from '../../domain/entities/employee-scheduling.js';
 import { scheduleVersionColumns } from './employee-scheduling-datasource.js';
+import { leaveRequestColumns } from './leave-columns.js';
+import type { LeaveRequest } from '../../domain/entities/leave.js';
+import { branchScopeSql } from '../security/access-context.js';
+import { BatchedEvaluationSession } from './batched-evaluation-session.js';
 
-class PrismaEvaluationSession implements EvaluationSession {
+export function createEvaluationSession(client: Queryable): EvaluationSession {
+  return new BatchedEvaluationSession(client, new PrismaEvaluationSession(client));
+}
+
+export class PrismaEvaluationSession implements EvaluationSession {
   constructor(private readonly database: Queryable) {}
 
   async snapshot(): Promise<EvaluationSnapshot> {
@@ -24,10 +32,15 @@ class PrismaEvaluationSession implements EvaluationSession {
       FROM attendance_logs a JOIN device_users u ON u.device_id = a.device_id AND u.device_user_id = a.user_id
       LEFT JOIN employees e ON e.id = u.employee_id
       WHERE a.occurred_at <= NOW() AND NOT (a.device_log_id IS NULL AND a.raw_data ? 'userSn'
-        AND EXISTS (SELECT 1 FROM attendance_logs newer WHERE newer.device_id = a.device_id AND newer.device_log_id = a.raw_data ->> 'userSn'))
+        AND EXISTS (SELECT 1 FROM attendance_logs newer WHERE newer.device_id = a.device_id AND newer.device_log_id = a.raw_data ->> 'userSn'
+          AND newer.user_id = a.user_id AND newer.occurred_at = a.occurred_at))
       ORDER BY a.occurred_at, a.id`)).rows;
     const employeeSchedules = (await this.database.query<EmployeeScheduleVersion>(`SELECT ${scheduleVersionColumns} FROM employee_schedule_versions ORDER BY created_at DESC,id DESC`)).rows;
-    return { branches, policies, schedules, assignments, branchAssignments, logs, employeeSchedules };
+    const approvedLeaves = (await this.database.query<LeaveRequest>(`SELECT ${leaveRequestColumns} FROM leave_requests WHERE status='approved'`)).rows;
+    const leaveSubjects = (await this.database.query<SubjectLog>(`SELECT e.id AS "employeeId",e.id AS "subjectId",e.id AS "deviceUserId",e.name,
+      e.employee_number AS "employeeNumber",'' AS "userId",e.branch_id AS "branchId",NOW() AS "occurredAt",e.id AS id
+      FROM employees e WHERE EXISTS (SELECT 1 FROM leave_requests r WHERE r.employee_id=e.id AND r.status='approved')`)).rows;
+    return { branches, policies, schedules, assignments, branchAssignments, logs, employeeSchedules, approvedLeaves, leaveSubjects };
   }
 
   async saveEvaluation(input: EvaluationWrite): Promise<string> {
@@ -68,7 +81,7 @@ class PrismaEvaluationSession implements EvaluationSession {
   async reconcile(activeIncidentIds: string[], activeDeductionIds: string[], activeEvaluationIds: string[]): Promise<void> {
     await this.database.prisma.attendance_incidents.updateMany({ where: { active: true, id: { notIn: activeIncidentIds } }, data: { active: false } });
     await this.database.prisma.attendance_deductions.updateMany({ where: { voided_at: null, id: { notIn: activeDeductionIds } }, data: { voided_at: new Date() } });
-    await this.database.prisma.attendance_evaluations.updateMany({ where: { id: { notIn: activeEvaluationIds } }, data: { active: false } });
+    await this.database.prisma.attendance_evaluations.updateMany({ where: { active: true, id: { notIn: activeEvaluationIds } }, data: { active: false } });
   }
 
   async updateCounters(id: string, counters: { arrival: number; meal: number }, deductionDays: number): Promise<void> {
@@ -83,7 +96,7 @@ export class PrismaEvaluationDatasource implements EvaluationDatasource {
     return this.database.transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('attendance-evaluation'))::text");
       await this.refreshBranches(client);
-      return operation(new PrismaEvaluationSession(client));
+      return operation(createEvaluationSession(client));
     });
   }
 
@@ -91,11 +104,13 @@ export class PrismaEvaluationDatasource implements EvaluationDatasource {
     return (await this.database.query(`SELECT ev.id, ev.subject_id AS "subjectId", ev.employee_id AS "employeeId", ev.device_user_id AS "deviceUserId",
       ev.date::text, ev.branch_id AS "branchId", ev.result,
       (SELECT jsonb_build_object('deviceId', a.device_id, 'userId', a.user_id, 'hasPhoto', TRUE)
-        FROM jsonb_array_elements(ev.result -> 'punches') AS punch(value)
-        JOIN attendance_logs a ON a.id = (punch.value ->> 'id')::uuid
+        FROM (SELECT value ->> 'id' AS log_id FROM jsonb_array_elements(ev.result -> 'punches')
+          UNION SELECT value ->> 'entryLogId' FROM jsonb_array_elements(COALESCE(ev.result -> 'routes','[]'::jsonb))
+          UNION SELECT value ->> 'exitLogId' FROM jsonb_array_elements(COALESCE(ev.result -> 'routes','[]'::jsonb))) sources
+        JOIN attendance_logs a ON a.id = sources.log_id::uuid
         JOIN device_user_photos p ON p.device_id = a.device_id AND p.device_user_id = a.user_id
         ORDER BY a.occurred_at DESC, a.id DESC LIMIT 1) AS photo
-      FROM attendance_evaluations ev WHERE ev.active AND ev.date BETWEEN $1::date AND $2::date
+      FROM attendance_evaluations ev WHERE (${branchScopeSql('ev.branch_id')}) AND ev.active AND ev.date BETWEEN $1::date AND $2::date
       AND ($3::uuid IS NULL OR ev.branch_id = $3) AND ($4::uuid IS NULL OR ev.subject_id = $4)
       ORDER BY ev.date DESC,
         ((ev.result ->> 'entry')::timestamptz AT TIME ZONE COALESCE(ev.result ->> 'timeZone', 'America/Mexico_City')) ASC NULLS LAST,
@@ -108,7 +123,7 @@ export class PrismaEvaluationDatasource implements EvaluationDatasource {
       d.window_start::text AS "windowStart", d.window_end::text AS "windowEnd", d.incident_ids AS "incidentIds", d.voided_at AS "voidedAt",
       i.occurred_at AS "occurredAt", ev.result ->> 'name' AS name, ev.result ->> 'branchName' AS "branchName", ev.result ->> 'timeZone' AS "timeZone"
       FROM attendance_deductions d JOIN attendance_incidents i ON i.id = d.trigger_incident_id
-      JOIN attendance_evaluations ev ON ev.id = i.evaluation_id WHERE ev.date BETWEEN $1::date AND $2::date
+      JOIN attendance_evaluations ev ON ev.id = i.evaluation_id WHERE (${branchScopeSql('ev.branch_id')}) AND ev.date BETWEEN $1::date AND $2::date
       AND ($3::uuid IS NULL OR ev.branch_id = $3) AND ($4::uuid IS NULL OR d.subject_id = $4) ORDER BY i.occurred_at DESC`,
     [filters.from, filters.to, filters.branchId ?? null, filters.subjectId ?? null])).rows;
   }

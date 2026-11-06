@@ -3,6 +3,7 @@ import type { SyncRun, SyncType } from '../../domain/entities/sync-run.js';
 import type { SyncDatasource } from '../../domain/datasources/persistence.js';
 import type { Queryable } from '../database/database.js';
 import type { sync_runs as SyncRecord } from '../database/generated/client.js';
+import { scopedBranchIds } from '../security/access-context.js';
 
 function mapSyncRun(row: SyncRecord): SyncRun {
   return {
@@ -31,8 +32,9 @@ export class PrismaSyncDatasource implements SyncDatasource {
   }
 
   async list(deviceId?: string): Promise<SyncRun[]> {
+    const ids = scopedBranchIds();
     return (await this.database.prisma.sync_runs.findMany({
-      where: { device_id: deviceId }, orderBy: { started_at: 'desc' }, take: 100,
+      where: { device_id: deviceId, ...(ids ? { devices: { branch_id: { in: ids } } } : {}) }, orderBy: { started_at: 'desc' }, take: 100,
     })).map(mapSyncRun);
   }
 }

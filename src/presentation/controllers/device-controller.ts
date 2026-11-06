@@ -3,6 +3,8 @@ import { NotFoundError } from '../../domain/errors/not-found-error.js';
 import type { ApplicationServices } from '../services.js';
 import { idParams } from '../validators/common.js';
 import { createDeviceSchema, deviceSchema, deviceFilterSchema, photoSyncSchema, photoParams, userListSchema } from '../validators/device.js';
+import { z } from 'zod';
+import { manualClockTimeSchema } from '../validators/device-clock.js';
 
 export class DeviceController {
   constructor(private readonly services: ApplicationServices) {}
@@ -39,7 +41,26 @@ export class DeviceController {
 
   testConnection = async (request: FastifyRequest) => {
     const device = await this.device(request);
-    return this.services.clients.getClient(device).testConnection(device);
+    return this.services.syncService.withDeviceLock(device, () => this.services.clients.getClient(device).testConnection(device));
+  };
+
+  clockTime = async (request: FastifyRequest) => {
+    await this.services.organization.refreshCurrentBranches();
+    return this.services.deviceClock.read(await this.device(request));
+  };
+
+  synchronizeClockTime = async (request: FastifyRequest) => {
+    z.object({}).strict().parse(request.body ?? {});
+    await this.services.organization.refreshCurrentBranches();
+    return this.services.deviceClock.synchronize(await this.device(request));
+  };
+
+  clockHistory = async (request: FastifyRequest) => this.services.deviceClock.history((await this.device(request)).id);
+
+  setManualClockTime = async (request: FastifyRequest) => {
+    const { localTime } = manualClockTimeSchema.parse(request.body);
+    await this.services.organization.refreshCurrentBranches();
+    return this.services.deviceClock.setManually(await this.device(request), localTime);
   };
 
   syncAttendance = async (request: FastifyRequest) => this.services.syncService.sync(await this.device(request));
@@ -58,7 +79,7 @@ export class DeviceController {
     const { deviceId, userId } = photoParams.parse(request.params);
     const photo = await this.services.photos.findByUserId(deviceId, userId);
     if (!photo) throw new NotFoundError('El usuario no tiene una foto disponible.');
-    return reply.type(photo.contentType).header('cache-control', 'private, max-age=300').send(photo.imageData);
+    return reply.type(photo.contentType).header('cache-control', 'no-store').send(photo.imageData);
   };
 
   syncRuns = (request: FastifyRequest) => this.services.syncRuns.list(deviceFilterSchema.parse(request.query).deviceId);

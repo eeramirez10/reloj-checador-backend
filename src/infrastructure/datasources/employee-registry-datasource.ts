@@ -10,7 +10,7 @@ import { validateEmployeeScheduling } from '../../domain/entities/employee-sched
 
 const clockFields = 'u.id, u.employee_id AS "employeeId", u.device_id AS "deviceId", d.branch_id AS "branchId", u.binding_status AS "bindingStatus"';
 
-class PrismaEmployeeRegistrySession implements EmployeeRegistrySession {
+export class PrismaEmployeeRegistrySession implements EmployeeRegistrySession {
   constructor(private readonly database: Queryable) {}
 
   async branchTimeZone(id: string): Promise<string | undefined> {
@@ -82,8 +82,8 @@ class PrismaEmployeeRegistrySession implements EmployeeRegistrySession {
         ON CONFLICT (employee_id, effective_from) DO NOTHING`, [sourceId, targetId]);
     }
     await this.database.query(`INSERT INTO employee_schedule_versions
-      (id,employee_id,effective_from,work_hours,meal,recognition_margin_minutes,meal_mode,recognition_margin_inherited,source)
-      SELECT gen_random_uuid(),$2,v.effective_from,v.work_hours,v.meal,v.recognition_margin_minutes,v.meal_mode,v.recognition_margin_inherited,'identity_merge'
+      (id,employee_id,effective_from,work_hours,meal,recognition_margin_minutes,meal_mode,recognition_margin_inherited,overtime_settings,source)
+      SELECT gen_random_uuid(),$2,v.effective_from,v.work_hours,v.meal,v.recognition_margin_minutes,v.meal_mode,v.recognition_margin_inherited,v.overtime_settings,'identity_merge'
       FROM employee_schedule_versions v WHERE v.employee_id=$1
         AND NOT EXISTS (SELECT 1 FROM employee_schedule_versions WHERE employee_id=$2)`, [sourceId, targetId]);
     await this.database.prisma.device_users.updateMany({ where: { employee_id: sourceId }, data: { binding_status: 'historical' } });

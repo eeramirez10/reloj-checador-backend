@@ -4,6 +4,7 @@ import type { EmploymentStatus } from '../../domain/entities/employee.js';
 import type { DeviceUser } from '../../domain/entities/device-user.js';
 import type { ZktecoUser } from '../../domain/datasources/device-client.js';
 import type { DeviceUserDatasource } from '../../domain/datasources/persistence.js';
+import { branchScopeSql } from '../security/access-context.js';
 
 type DeviceUserRow = {
   employee_id: string | null; branch_id: string | null; branch_name: string | null;
@@ -60,12 +61,12 @@ export class PrismaDeviceUserDatasource implements DeviceUserDatasource {
            COALESCE((SELECT b.time_zone FROM devices d JOIN branches b ON b.id = d.branch_id WHERE d.id = $2), 'America/Mexico_City'), to_jsonb(e)
          FROM created e RETURNING id
        ), stored AS (
-       INSERT INTO device_users (id, device_id, device_user_id, uid, name, role, card_number, raw_data, branch_id, employee_id, binding_status)
+        INSERT INTO device_users (id, device_id, device_user_id, uid, name, role, card_number, raw_data, branch_id, employee_id, binding_status, role_observed_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, (SELECT branch_id FROM devices WHERE id = $2),
          COALESCE((SELECT employee_id FROM existing), (SELECT id FROM candidate), (SELECT id FROM created)),
-         COALESCE((SELECT binding_status FROM existing), 'active'))
+          COALESCE((SELECT binding_status FROM existing), 'active'), CASE WHEN $6::int IS NOT NULL THEN NOW() ELSE NULL END)
        ON CONFLICT (device_id, device_user_id) DO UPDATE SET
-          uid = EXCLUDED.uid, name = EXCLUDED.name, role = EXCLUDED.role, card_number = EXCLUDED.card_number,
+           uid = EXCLUDED.uid, name = EXCLUDED.name, role = EXCLUDED.role, card_number = EXCLUDED.card_number, role_observed_at = EXCLUDED.role_observed_at,
           employee_id = COALESCE(device_users.employee_id, EXCLUDED.employee_id), raw_data = EXCLUDED.raw_data, synced_at = NOW()
        RETURNING id, employee_id, binding_status)
        INSERT INTO employee_clock_events (id, employee_id, device_user_id, reason)
@@ -99,7 +100,7 @@ export class PrismaDeviceUserDatasource implements DeviceUserDatasource {
         LEFT JOIN employees e ON e.id = u.employee_id
         LEFT JOIN devices d ON d.id = u.device_id
         LEFT JOIN branches b ON b.id = COALESCE(e.branch_id, u.branch_id, d.branch_id)
-       WHERE ($1::uuid IS NULL OR u.device_id = $1) ORDER BY u.name NULLS LAST, u.device_user_id LIMIT $2`,
+       WHERE (${branchScopeSql('d.branch_id')}) AND (e.id IS NULL OR (${branchScopeSql('e.branch_id')})) AND ($1::uuid IS NULL OR u.device_id = $1) ORDER BY u.name NULLS LAST, u.device_user_id LIMIT $2`,
       [filters.deviceId ?? null, filters.limit]
     );
     return result.rows.map(mapRow);
