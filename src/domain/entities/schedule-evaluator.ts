@@ -12,7 +12,7 @@ export interface EvaluationPunch { id: string; occurredAt: Date }
 export interface ClassifiedPunch { id: string; occurredAt: string; localTime: string; movement: Movement }
 export interface DailyEvaluation {
   date: string;
-  status: 'complete' | 'incomplete' | 'in_progress' | 'ambiguous' | 'day_off' | 'unconfigured' | 'authorized_absence';
+  status: 'complete' | 'incomplete' | 'in_progress' | 'ambiguous' | 'day_off' | 'unconfigured' | 'authorized_absence' | 'authorized_work';
   leaveAuthorizations?: LeaveAuthorization[];
   punches: ClassifiedPunch[];
   entry?: string;

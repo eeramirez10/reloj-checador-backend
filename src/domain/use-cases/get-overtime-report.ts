@@ -37,7 +37,7 @@ export class GetOvertimeReport {
       employees.push({ employee, days, totals: summary });
       for (const key of Object.keys(totals) as Array<keyof typeof totals>) totals[key] += summary[key];
     }
-    return { branch: snapshot.branch, period, employeeStatus: query.employeeStatus, totals, totalEmployees: employees.length,...(snapshot.companyFilter ? {companyFilter: snapshot.companyFilter} : {}),
+    return { branch: snapshot.branch, period, employeeStatus: query.employeeStatus, totals, totalEmployees: employees.length,...(snapshot.companyFilter ? {companyFilter: snapshot.companyFilter} : {}),...(snapshot.search ? {search:snapshot.search} : {}),
       employees };
   }
 }

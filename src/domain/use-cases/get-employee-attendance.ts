@@ -9,6 +9,7 @@ import { NotFoundError } from '../errors/not-found-error.js';
 import { pendingOvertime } from '../entities/overtime.js';
 import { authorizationsForDay, unauthorizedEarlyExit } from '../entities/leave-attendance.js';
 import { latenessMinutes } from '../entities/tolerance.js';
+import { isOffsiteWork } from '../entities/leave.js';
 
 export function dayContext(date: string, employee: Employee, history: EmployeeAttendanceHistory) {
   const branchId = history.branchAssignments.length ? effectiveVersion(history.branchAssignments, date)?.branchId : employee.branchId;
@@ -39,7 +40,7 @@ function buildDay(date: string, employee: Employee, history: EmployeeAttendanceH
   const authorizations = authorizationsForDay(history.approvedLeaves ?? [], date);
   const settings = result?.scheduleSettings ?? schedule?.settings ?? null;
   const timeZone = result?.timeZone ?? branch?.timeZone ?? 'America/Mexico_City';
-  const status = authorizations.some((item) => item.kind === 'absence') && !result?.punches.length && !result?.routes?.length
+  const status = authorizations.some(item=>isOffsiteWork(item.kind)) ? 'authorized_work' : authorizations.some((item) => item.kind === 'absence') && !result?.punches.length && !result?.routes?.length
     ? 'authorized_absence' : result?.status ?? emptyDayStatus(date, timeZone, settings, now);
   const weekday = new Date(`${date}T12:00:00Z`).getUTCDay() || 7;
   const workday = settings?.workDays.includes(weekday);
@@ -75,6 +76,7 @@ function summarize(days: EmployeeAttendanceDay[]): EmployeeAttendanceSummary {
     if (day.status === 'no_records') summary.daysWithoutRecords += 1;
     if (day.status === 'day_off') summary.daysOff += 1;
     if (day.status === 'authorized_absence') summary.authorizedAbsenceDays = (summary.authorizedAbsenceDays ?? 0) + 1;
+    if (day.status === 'authorized_work') summary.authorizedWorkDays = (summary.authorizedWorkDays ?? 0) + 1;
     summary.arrivalTardies += day.incidents.filter((item) => item.kind === 'arrival').length;
     summary.mealTardies += day.incidents.filter((item) => item.kind !== 'arrival').length;
     if ((day.unauthorizedEarlyExitMinutes ?? day.earlyExitMinutes ?? 0) > 0) summary.earlyExits += 1;

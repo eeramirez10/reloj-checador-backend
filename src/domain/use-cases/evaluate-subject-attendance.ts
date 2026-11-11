@@ -45,8 +45,9 @@ export function evaluateSubjectAttendance(logs: SubjectLog[], snapshot: Evaluati
   for (const { context,logs: punches } of dailyGroups.values()) {
     const zone = context.branch?.timeZone ?? 'America/Mexico_City';
     const authorizations = authorizationsForDay(leaves, context.date);
-    const daily: DailyEvaluation = context.schedule ? evaluateDay(context.date,punches,authorizedSchedule(context.schedule.settings, authorizations),context.policy?.settings,zone,now,
-      { firstPunchIsEntry: context.overtime.enabled || authorizations.some((item) => item.kind === 'late_arrival') }) : { date: context.date, status: 'unconfigured', punches: punches.map((log) => ({ id: log.id,
+    const observedExit=punches.length>1 && punches.at(-1)!.occurredAt.getTime()-punches[0].occurredAt.getTime()>=60000 ? formatDateTimeInTimeZone(punches.at(-1)!.occurredAt,zone).slice(11,16) : undefined;
+    const daily: DailyEvaluation = context.schedule ? evaluateDay(context.date,punches,authorizedSchedule(context.schedule.settings, authorizations,observedExit),context.policy?.settings,zone,now,
+      { firstPunchIsEntry: context.overtime.enabled || authorizations.some((item) => ['late_arrival','early_exit','home_office','client_visit'].includes(item.kind)) }) : { date: context.date, status: 'unconfigured', punches: punches.map((log) => ({ id: log.id,
         occurredAt: log.occurredAt.toISOString(), localTime: formatDateTimeInTimeZone(log.occurredAt,zone), movement: 'unclassified' })),
       issues: ['Asigna una jornada laboral de sucursal o individual vigente para identificar esta jornada.'], incidents: [] };
     applyDailyOvertime(daily,context);

@@ -8,6 +8,7 @@ import { loadEmployeeAttendanceHistories } from './employee-attendance-datasourc
 import { assertAttendanceHistoryAccess } from '../security/attendance-history-access.js';
 import { companyFilterSql } from './company-filter.js';
 import type { CompanySelection } from '../../domain/entities/company.js';
+import { branchScopeSql } from '../security/access-context.js';
 
 export class PrismaBranchAttendanceDatasource implements BranchAttendanceDatasource {
   constructor(private readonly database: Pick<Database, 'transaction'>) {}
@@ -33,16 +34,22 @@ export class PrismaBranchAttendanceDatasource implements BranchAttendanceDatasou
         if (!companyFilter) throw new NotFoundError('Empresa no encontrada.');
       }
       const isActive = query.employeeStatus === 'active';
+      const search = query.search?.trim() || undefined;
+      const pattern = search ? `%${search.replace(/[\\%_]/g,'\\$&')}%` : null;
+      const selection = `branch_id=$1 AND is_active=$2 AND identification_status<>'merged' AND discarded_at IS NULL AND ${companyFilterSql('company_id',3)}
+        AND ($4::text IS NULL OR name ILIKE $4 OR EXISTS(SELECT 1 FROM device_users clock_user JOIN devices clock ON clock.id=clock_user.device_id
+          WHERE clock_user.employee_id=employees.id AND (${branchScopeSql('clock.branch_id')}) AND clock_user.device_user_id ILIKE $4))`;
+      const parameters = [query.branchId,isActive,query.companyId ?? null,pattern];
       const totalEmployees = (await client.query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM employees
-        WHERE branch_id=$1 AND is_active=$2 AND identification_status <> 'merged' AND ${companyFilterSql('company_id',3)}`, [query.branchId, isActive,query.companyId ?? null])).rows[0].count;
+        WHERE ${selection}`, parameters)).rows[0].count;
       const page = pagination ? Math.min(pagination.page, Math.max(1, Math.ceil(totalEmployees / pagination.limit))) : 1;
       const employees = (await client.query<EmployeeRow>(`SELECT ${employeeSelectColumns()} FROM employees
-        WHERE branch_id=$1 AND is_active=$2 AND identification_status <> 'merged' AND ${companyFilterSql('company_id',3)}
-        ORDER BY name, employee_number NULLS LAST, id LIMIT $4::int OFFSET $5::int`,
-      [query.branchId, isActive,query.companyId ?? null, pagination?.limit ?? null, pagination ? (page - 1) * pagination.limit : 0])).rows.map(mapEmployeeRow);
+        WHERE ${selection}
+        ORDER BY name, employee_number NULLS LAST, id LIMIT $5::int OFFSET $6::int`,
+      [...parameters,pagination?.limit ?? null, pagination ? (page - 1) * pagination.limit : 0])).rows.map(mapEmployeeRow);
       await assertAttendanceHistoryAccess(client, employees.map((employee) => employee.id), query);
       const histories = await loadEmployeeAttendanceHistories(client, employees.map((employee) => employee.id), query);
-      return { branch, employees, histories, page, totalEmployees,...(companyFilter ? {companyFilter} : {}) };
+      return { branch, employees, histories, page, totalEmployees,...(companyFilter ? {companyFilter} : {}),...(search ? {search} : {}) };
     });
   }
 }

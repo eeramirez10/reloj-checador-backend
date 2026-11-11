@@ -31,6 +31,7 @@ export type EmployeeRow = {
   branch_name: string | null;
   company_id: string | null;
   company_name: string | null;
+  has_attendance: boolean;
   first_name: string | null;
   last_name: string | null;
   identification_status: Employee['identificationStatus'];
@@ -49,6 +50,7 @@ export function employeeSelectColumns() { return `id, employee_number, normalize
   termination_date::text AS termination_date, ${statusExpression} AS employment_status, created_at, updated_at, branch_id,
   (SELECT name FROM branches WHERE id = employees.branch_id) AS branch_name,
   company_id,(SELECT name FROM companies WHERE id=employees.company_id) AS company_name,
+  EXISTS(SELECT 1 FROM device_users all_links JOIN attendance_logs punches ON punches.device_id=all_links.device_id AND punches.user_id=all_links.device_user_id WHERE all_links.employee_id=employees.id) AS has_attendance,
   identification_status, merged_into_id, is_active, original_name, name_split_method,
   (SELECT jsonb_build_object('versionId', v.id, 'effectiveFrom', v.effective_from::text, 'workHours', v.work_hours,
     'meal', v.meal, 'recognitionMarginMinutes', v.recognition_margin_minutes,
@@ -90,6 +92,7 @@ export const mapEmployeeRow = (row: EmployeeRow): Employee => ({
   branchName: row.branch_name ?? undefined,
   companyId: row.company_id ?? null,
   companyName: row.company_name ?? null,
+  hasAttendance: row.has_attendance ?? false,
   identificationStatus: row.identification_status,
   mergedIntoId: row.merged_into_id ?? undefined,
   clockRecords: row.clock_records ?? [],
@@ -103,11 +106,12 @@ export class PrismaEmployeeDatasource implements EmployeeDatasource {
   constructor(private readonly database: Queryable) {}
 
   async findById(id: string): Promise<Employee | undefined> {
-    const row = (await this.database.query<EmployeeRow>(`SELECT ${employeeSelectColumns()} FROM employees WHERE id = $1`, [id])).rows[0];
+    const row = (await this.database.query<EmployeeRow>(`SELECT ${employeeSelectColumns()} FROM employees WHERE id = $1 AND discarded_at IS NULL`, [id])).rows[0];
     return row ? mapEmployeeRow(row) : undefined;
   }
 
   async update(id: string, fields: Record<string, string | null>, isActive?: boolean): Promise<boolean> {
+    if (!(await this.database.query('SELECT id FROM employees WHERE id=$1 AND discarded_at IS NULL FOR UPDATE',[id])).rows.length) return false;
     const statusChanged = isActive === undefined ? false : await new EmployeeLifecycle(this.database).setActive(id, isActive);
     const changes = { ...fields };
     if (changes.companyId !== undefined) {
@@ -172,6 +176,8 @@ export class PrismaEmployeeDatasource implements EmployeeDatasource {
   }
 
   async list(filters: EmployeeFilters): Promise<Employee[]> {
+    const sort={name:'name',branch:'(SELECT name FROM branches WHERE id=employees.branch_id)',company:'(SELECT name FROM companies WHERE id=employees.company_id)'}[filters.sortBy??'name'];
+    const direction=filters.sortOrder==='desc'?'DESC':'ASC';
     const result = await this.database.query<EmployeeRow>(
       `SELECT ${employeeSelectColumns()} FROM employees
         WHERE (${branchScopeSql('branch_id')}) AND ($1::text IS NULL OR employee_number ILIKE '%' || $1 || '%'
@@ -180,11 +186,12 @@ export class PrismaEmployeeDatasource implements EmployeeDatasource {
          OR rfc ILIKE '%' || $1 || '%' OR imss ILIKE '%' || $1 || '%')
          AND ($2::text IS NULL OR branch_code = $2)
           AND ($3::text IS NULL OR (${statusExpression}) = $3)
-          AND identification_status <> 'merged'
+           AND identification_status <> 'merged'
+           AND discarded_at IS NULL
           AND ($5::text IS NULL OR identification_status = $5)
           AND ${companyFilterSql('company_id',6)}
           AND ($7::text IS NULL OR CASE WHEN $7='unassigned' THEN branch_id IS NULL ELSE branch_id=$7::uuid END)
-       ORDER BY name, employee_number LIMIT $4`,
+        ORDER BY ${sort} ${direction} NULLS LAST,name,employee_number,id LIMIT $4`,
       [filters.search?.trim() || null, filters.branchCode ?? null, filters.employmentStatus ?? null, filters.limit, filters.identificationStatus ?? null,filters.companyId ?? null,filters.branchId ?? null],
     );
     return result.rows.map(mapEmployeeRow);

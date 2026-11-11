@@ -14,6 +14,7 @@ const readRoutes = new Set([
   '/attendance/overtime','/attendance/overtime/export','/attendance/deductions','/leave-requests','/leave-requests/:id','/attendance/imports',
 ]);
 const hrWrites = new Set([
+  'POST /employees/:id/discard',
   'POST /employees','POST /employees/:id/identify','POST /employees/:id/clock-record','PATCH /employees/:id','PUT /employees/:id/scheduling','PATCH /users/:id/profile',
   'POST /branches/:id/configuration','DELETE /branches/:id/configuration/versions/:versionId','POST /branches/:id/policies','POST /work-schedules',
   'POST /organization/assignments','POST /work-schedules/:id/assignments','POST /branches/:id/assignments',
@@ -31,6 +32,7 @@ function allowed(principal: AuthPrincipal, method: string, route: string): boole
   if (route.startsWith('/me/') || (method === 'GET' && route === '/blood-types')) return true;
   if (route === '/leave-requests/:id/resolve' && method === 'POST') return true;
   if (principal.role === 'employee') return method === 'GET' && ['/leave-requests','/leave-requests/:id'].includes(route);
+  if(route==='/companies/:id/employees') return ['admin','hr'].includes(principal.role);
   if (route === '/manager-options' || route === '/employees/:id/contact' || route === '/employees/:id/access') return ['admin','hr'].includes(principal.role);
   if (principal.role === 'admin') return true;
   if (method === 'GET' && readRoutes.has(route)) return true;
@@ -59,6 +61,7 @@ async function checkReferences(value: unknown, services: ApplicationServices, ed
 
 async function authorizeReferences(request: FastifyRequest, route: string, services: ApplicationServices) {
   if (route.startsWith('/me/')) return;
+  if(route==='/companies/:id/employees' && request.method==='POST') return;
   const params = request.params as Record<string,string>;
   const contactOnly = route === '/employees/:id' && request.method === 'PATCH' && request.body && Object.keys(request.body).every(key => ['contact','companyId'].includes(key));
   const accessOnly = route === '/employees/:id/access';
@@ -72,7 +75,7 @@ async function authorizeReferences(request: FastifyRequest, route: string, servi
   await checkReferences(params, services);
   await checkReferences(request.query, services);
   const managerAssignment = route.startsWith('/employees/:id') && ['PUT','PATCH'].includes(request.method) && ['admin','hr'].includes(services.access.current()!.role);
-  await checkReferences(request.body, services, true, managerAssignment);
+  await checkReferences(request.body, services, route!=='/companies/:id/employees', managerAssignment);
 }
 
 export function registerAuthentication(app: FastifyInstance, services: ApplicationServices) {

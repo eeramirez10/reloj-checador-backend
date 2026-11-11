@@ -4,9 +4,11 @@ import type { CompanyFilter,CompanySelection } from './company.js';
 
 export interface BranchAttendanceFilters extends AttendancePeriod, CompanyFilter {
   branchId: string; employeeStatus: 'active' | 'inactive';
+  search?: string;
 }
 export interface BranchAttendanceQuery extends BranchAttendanceFilters { page: number; limit: number }
 export interface BranchAttendanceExport {
+  search?: string;
   companyFilter?: CompanySelection;
   branch: Pick<Branch, 'id' | 'name' | 'timeZone'>;
   period: AttendancePeriod;

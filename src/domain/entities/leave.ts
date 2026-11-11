@@ -1,8 +1,10 @@
-export type LeaveKind = 'absence' | 'late_arrival' | 'early_exit';
+export type LeaveKind = 'absence' | 'late_arrival' | 'early_exit' | 'home_office' | 'client_visit';
+export function isOffsiteWork(kind: LeaveKind): boolean { return kind==='home_office' || kind==='client_visit'; }
 export type LeaveStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 export interface LeaveInput {
   employeeId: string; kind: LeaveKind; from: string; to: string; authorizedTime: string | null;
   paid: boolean; useVacation: boolean; reason: string;
+  clientName?: string | null; fullDay?: boolean; replacesRequestId?: string | null;
 }
 export interface LeaveDay {
   date: string; branchId: string; branchName: string; timeZone: string;
@@ -22,6 +24,7 @@ export interface LeaveProfileInput {
 }
 export interface VacationMovement { id: string; requestId: string | null; kind: 'adjustment' | 'consumption' | 'return'; days: number; balanceAfter: number; reason: string; createdAt: string }
 export interface LeaveEvent {
+  actorEmployeeName?: string | null; actorRole?: string | null; previousStatus?: LeaveStatus | null;
   emailStatus?: string | null; recipientEmail?: string | null;
   actorAccountId?: string | null; actorAccountName?: string | null;
   id: string; kind: 'created' | Exclude<LeaveStatus, 'pending'>; actorEmployeeId: string | null; comments: string;
@@ -30,6 +33,7 @@ export interface LeaveEvent {
 export interface LeavePreview { input: LeaveInput; managerId: string; details: LeaveDetails; vacationBalance: number; vacationDays: number; token: string }
 export interface LeaveFilters { from: string; to: string; branchId?: string; employeeId?: string; managerId?: string; status?: LeaveStatus; kind?: LeaveKind; scope?: 'own' | 'assigned'; page: number; limit: number }
 export interface LeaveAuthorization {
+  clientName?: string | null; fullDay?: boolean;
   requestId: string; kind: LeaveKind; paid: boolean; useVacation: boolean; reason: string; authorizedTime: string | null;
   start: string; end: string;
 }

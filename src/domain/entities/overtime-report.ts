@@ -13,6 +13,7 @@ export interface EmployeeOvertimeReport {
   totals: OvertimeTotals;
 }
 export interface OvertimeReportData {
+  search?: string;
   companyFilter?: CompanySelection;
   branch: { id: string; name: string; timeZone: string };
   period: { from: string; to: string };

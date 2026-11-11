@@ -1,12 +1,13 @@
 import type { LeaveEvent, LeaveFilters, LeaveInput, LeaveDetails, LeaveProfile, LeaveProfileInput, LeaveRequest, LeaveStatus, VacationMovement } from '../entities/leave.js';
 import type { Employee } from '../entities/employee.js';
 import type { EmployeeAttendanceHistory } from './employee-attendance-repository.js';
-import type { AuthAccount } from '../entities/auth.js';
+import type { AuthAccount,AuthPrincipal } from '../entities/auth.js';
 
 export interface LeaveContext { employee: Employee; profile: LeaveProfile; history: EmployeeAttendanceHistory }
 
 export interface LeaveSession {
   decisionAccount(id: string): Promise<Pick<AuthAccount,'role' | 'employeeId' | 'isActive' | 'version'> | undefined>;
+  cancellationBranches(id:string):Promise<Array<string|null>>;
   context(employeeId: string, from: string, to: string): Promise<LeaveContext>;
   profile(employeeId: string): Promise<LeaveProfile>;
   saveProfile(employeeId: string, input: LeaveProfileInput): Promise<LeaveProfile>;
@@ -15,8 +16,8 @@ export interface LeaveSession {
   overlapping(employeeId: string, from: string, to: string): Promise<LeaveRequest[]>;
   create(input: LeaveInput, managerId: string, branchId: string, details: LeaveDetails, sourceKey: string): Promise<LeaveRequest>;
   findBySourceKey(key: string): Promise<LeaveRequest | null>;
-  resolve(id: string, status: LeaveStatus, actorId: string): Promise<LeaveRequest>;
-  event(request: LeaveRequest, kind: LeaveEvent['kind'], comments: string, actorId?: string): Promise<void>;
+  resolve(id: string, status: LeaveStatus, actorId: string|null): Promise<LeaveRequest>;
+  event(request: LeaveRequest, kind: LeaveEvent['kind'], comments: string, actorId?: string|null,previousStatus?:LeaveStatus,actorAccount?:AuthPrincipal): Promise<void>;
   recalculateAttendance(): Promise<void>;
 }
 export interface LeaveRepository {

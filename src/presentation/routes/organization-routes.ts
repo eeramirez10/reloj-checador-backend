@@ -4,6 +4,8 @@ import { EmployeeController } from '../controllers/employee-controller.js';
 import { OrganizationController } from '../controllers/organization-controller.js';
 import { AttendanceController } from '../controllers/attendance-controller.js';
 import { AttendanceFileController } from '../controllers/attendance-file-controller.js';
+import { idParams } from '../validators/common.js';
+import { z } from 'zod';
 
 export function registerOrganizationRoutes(app: FastifyInstance, services: ApplicationServices): void {
   const employees = new EmployeeController(services);
@@ -16,6 +18,11 @@ export function registerOrganizationRoutes(app: FastifyInstance, services: Appli
   app.get('/employees/:id', employees.find);
   app.post('/employees', employees.create);
   app.post('/employees/:id/identify', employees.identify);
+  app.post('/employees/:id/discard',async (request,reply) => {
+    const input = z.object({reason:z.string().trim().min(1).max(500).default('Registro pendiente sin checadas.')}).strict().parse(request.body ?? {});
+    await services.discardEmployee.execute(idParams.parse(request.params).id,services.access.current()!,input.reason);
+    return reply.code(204).send();
+  });
   app.post('/employees/:id/clock-record', employees.assignClock);
   app.get('/employees/:id/history', employees.history);
   app.get('/employees/:id/attendance', employees.attendance);

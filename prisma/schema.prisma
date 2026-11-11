@@ -70,6 +70,7 @@ model attendance_incidents {
 }
 
 model attendance_logs {
+  discard_events employee_discard_events[]
   id                   String                 @id @db.Uuid
   device_id            String                 @db.Uuid
   event_key            String
@@ -323,6 +324,8 @@ model employee_unification_snapshots {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model employees {
+  discarded_at DateTime? @db.Timestamptz(6)
+  discard_events employee_discard_events[]
   company_id String? @db.Uuid
   company companies? @relation(fields: [company_id], references: [id])
   access_account auth_accounts?
@@ -477,6 +480,11 @@ model employee_leave_profiles {
 }
 
 model leave_requests {
+  client_name String?
+  full_day Boolean @default(true)
+  replaces_request_id String? @db.Uuid
+  replaces leave_requests? @relation("leaveReplacement", fields: [replaces_request_id], references: [id])
+  replacements leave_requests[] @relation("leaveReplacement")
   id String @id @db.Uuid
   employee_id String @db.Uuid
   manager_id String @db.Uuid
@@ -504,6 +512,7 @@ model leave_requests {
   events leave_request_events[]
   @@index([employee_id, from_date, to_date], map: "leave_requests_employee_dates_idx")
   @@index([status, created_at(sort: Desc)], map: "leave_requests_status_created_idx")
+  @@index([replaces_request_id], map: "leave_requests_replacement_idx")
 }
 
 model vacation_movements {
@@ -524,6 +533,8 @@ model vacation_movements {
 }
 
 model leave_request_events {
+  previous_status String?
+  actor_role String?
   email email_outbox?
   actor_account_id String? @db.Uuid
   actor_account auth_accounts? @relation(fields: [actor_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -543,6 +554,7 @@ model leave_request_events {
 }
 
 model auth_accounts {
+  discard_events employee_discard_events[]
   employee_id String? @unique @db.Uuid
   employee employees? @relation(fields: [employee_id], references: [id])
   temporary_password_expires_at DateTime? @db.Timestamptz(6)
@@ -562,6 +574,20 @@ model auth_accounts {
   audit auth_audit_events[]
   leave_events leave_request_events[]
   vacation_movements vacation_movements[]
+}
+
+model employee_discard_events {
+  id String @id @db.Uuid
+  employee_id String @db.Uuid
+  kind String
+  actor_account_id String? @db.Uuid
+  attendance_log_id String? @db.Uuid
+  reason String
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  employee employees @relation(fields: [employee_id], references: [id])
+  account auth_accounts? @relation(fields: [actor_account_id], references: [id])
+  log attendance_logs? @relation(fields: [attendance_log_id], references: [id])
+  @@index([employee_id,created_at], map: "employee_discard_events_employee_idx")
 }
 
 model companies {

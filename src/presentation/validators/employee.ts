@@ -22,6 +22,7 @@ export const employeeIdentifySchema = personalProfileSchema.extend({
 }).strict();
 export const employeeClockSchema = z.object({ clockRecordId: z.string().uuid() });
 export const employeeListSchema = z.object({
+  sortBy:z.enum(['name','branch','company']).optional(),sortOrder:z.enum(['asc','desc']).optional(),
   companyId: companyFilterSchema,branchId: companyFilterSchema,
   search: z.string().trim().max(120).optional(), branchCode: z.string().trim().max(20).optional(),
   employmentStatus: z.enum(['active', 'inactive', 'pending']).optional(),

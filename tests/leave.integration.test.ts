@@ -22,7 +22,8 @@ integration('employee leave requests, vacation accounting and attendance', () =>
   let bossServices: Awaited<ReturnType<typeof buildApplication>>;
   let bossPrincipal: AuthPrincipal;
   async function call(method: 'GET' | 'POST' | 'PUT', url: string, payload?: object, expected = 200) {
-    const response = await (url.endsWith('/resolve') ? bossServices : services).app.inject({ method, url, payload });
+    const decision=payload as {action?:string}|undefined;
+    const response = await (url.endsWith('/resolve') && decision?.action!=='cancel' ? bossServices : services).app.inject({ method, url, payload });
     expect(response.statusCode, response.body).toBe(expected);
     return response.body ? response.json() : undefined;
   }

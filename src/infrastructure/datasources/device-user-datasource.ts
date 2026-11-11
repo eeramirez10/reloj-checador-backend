@@ -100,7 +100,7 @@ export class PrismaDeviceUserDatasource implements DeviceUserDatasource {
         LEFT JOIN employees e ON e.id = u.employee_id
         LEFT JOIN devices d ON d.id = u.device_id
         LEFT JOIN branches b ON b.id = COALESCE(e.branch_id, u.branch_id, d.branch_id)
-       WHERE (${branchScopeSql('d.branch_id')}) AND (e.id IS NULL OR (${branchScopeSql('e.branch_id')})) AND ($1::uuid IS NULL OR u.device_id = $1) ORDER BY u.name NULLS LAST, u.device_user_id LIMIT $2`,
+        WHERE e.discarded_at IS NULL AND (${branchScopeSql('d.branch_id')}) AND (e.id IS NULL OR (${branchScopeSql('e.branch_id')})) AND ($1::uuid IS NULL OR u.device_id = $1) ORDER BY u.name NULLS LAST, u.device_user_id LIMIT $2`,
       [filters.deviceId ?? null, filters.limit]
     );
     return result.rows.map(mapRow);

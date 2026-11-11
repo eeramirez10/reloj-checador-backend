@@ -79,6 +79,10 @@ import { EmailWorker } from './infrastructure/jobs/email-worker.js';
 import type { EmailSettings } from './infrastructure/config/email.js';
 import type { EmailGateway } from './domain/datasources/email-gateway.js';
 import { PrismaCompanyRepository } from './infrastructure/repositories/company-repository.js';
+import { DiscardPendingEmployee } from './domain/use-cases/discard-pending-employee.js';
+import { PrismaEmployeeDiscardRepository } from './infrastructure/repositories/employee-discard-repository.js';
+import { PrismaCompanyEmployeeRepository } from './infrastructure/repositories/company-employee-repository.js';
+import { AssignCompanyEmployees } from './domain/use-cases/assign-company-employees.js';
 
 export function createAttendanceEvaluation(database: Database, organization: PrismaOrganizationDatasource) {
   return new AttendanceEvaluationService(new EvaluationRepositoryImpl(new PrismaEvaluationDatasource(database,
@@ -163,6 +167,9 @@ export async function buildApp(dependencies: AppDependencies = {}) {
     const userPhotoSyncService = new UserPhotoSyncService(users, photos, syncRuns, photoBridge, syncService);
     const app = await createHttpServer({
       companies: new PrismaCompanyRepository(database),
+      discardEmployee: new DiscardPendingEmployee(new PrismaEmployeeDiscardRepository(database)),
+      companyEmployees:new PrismaCompanyEmployeeRepository(database),
+      assignCompanyEmployees:new AssignCompanyEmployees(new PrismaCompanyEmployeeRepository(database)),
       auth, access, employeeAccess, portal: new PrismaEmployeePortalRepository(database,env.PHONE_DEFAULT_COUNTRY), contacts: new PrismaEmployeeContactRepository(database,env.PHONE_DEFAULT_COUNTRY), authentication: { origins: env.AUTH_ALLOWED_ORIGINS, secureCookie: env.AUTH_COOKIE_SECURE, sessionHours: env.AUTH_SESSION_HOURS, ...dependencies.authentication },
       devices, attendance, syncRuns, users, photos, employees, organization, profiles, registry, evaluation, updateEmployee, employeeScheduling, employeeAttendance, branchConfiguration, branchAttendance, overtimeReport, attendanceFile,
       clients, syncService, userSyncService, userPhotoSyncService, deviceClock, deviceUserRole, leave, whatsapp, defaultDriver: env.ZK_DRIVER,

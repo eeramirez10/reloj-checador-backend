@@ -19,6 +19,7 @@ export interface Employee extends Omit<EmployeeCatalogRecord, 'employeeNumber' |
   identificationStatus: 'confirmed' | 'pending' | 'merged'; mergedIntoId?: string; clockRecords: EmployeeClockRecord[];
   isActive: boolean; originalName?: string; nameSplitMethod?: string;
   companyId?: string | null; companyName?: string | null;
+  hasAttendance?: boolean;
   scheduling?: EmployeeScheduleSettings & { versionId: string; effectiveFrom: string };
 }
 export function normalizeEmployeeNumber(employeeNumber: string): string {

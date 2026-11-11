@@ -40,7 +40,7 @@ export class PrismaEmployeeRegistrySession implements EmployeeRegistrySession {
   }
 
   async lockEmployee(id: string): Promise<RegistryEmployee> {
-    const employee = (await this.database.query<RegistryEmployee>('SELECT id, branch_id AS "branchId", company_id AS "companyId", identification_status AS "identificationStatus", first_name AS "firstName" FROM employees WHERE id = $1 FOR UPDATE', [id])).rows[0];
+    const employee = (await this.database.query<RegistryEmployee>('SELECT id, branch_id AS "branchId", company_id AS "companyId", identification_status AS "identificationStatus", first_name AS "firstName" FROM employees WHERE id = $1 AND discarded_at IS NULL FOR UPDATE', [id])).rows[0];
     if (!employee) throw new ConfigurationError('Empleado no encontrado.');
     return employee;
   }
@@ -140,6 +140,8 @@ export class PrismaEmployeeRegistryDatasource implements EmployeeRegistryDatasou
     const scheduleEvents = (await this.database.query(`SELECT ${scheduleVersionColumns} FROM employee_schedule_versions
       WHERE employee_id=$1 OR employee_id IN (SELECT source_employee_id FROM employee_merge_events WHERE target_employee_id=$1)
       ORDER BY created_at DESC,id DESC`, [employeeId])).rows;
-    return { snapshots, merges, clockEvents, statusEvents, scheduleEvents };
+    const discardEvents = (await this.database.query(`SELECT ev.id,ev.kind,ev.reason,ev.created_at AS "createdAt",a.name AS "actorName",ev.attendance_log_id AS "attendanceLogId"
+      FROM employee_discard_events ev LEFT JOIN auth_accounts a ON a.id=ev.actor_account_id WHERE ev.employee_id=$1 ORDER BY ev.created_at,ev.id`,[employeeId])).rows;
+    return { snapshots, merges, clockEvents, statusEvents, scheduleEvents,discardEvents };
   }
 }

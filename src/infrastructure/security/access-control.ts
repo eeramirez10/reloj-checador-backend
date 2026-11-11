@@ -7,7 +7,7 @@ import { accessContext, branchScopeSql } from './access-context.js';
 
 const resourceQueries: Record<AccessResource,string> = {
   branch: 'SELECT id AS branch_id FROM branches WHERE id=$1',
-  employee: 'SELECT branch_id FROM employees WHERE id=$1',
+  employee: 'SELECT branch_id FROM employees WHERE id=$1 AND discarded_at IS NULL',
   device: 'SELECT branch_id FROM devices WHERE id=$1 AND deleted_at IS NULL',
   schedule: 'SELECT branch_id FROM work_schedules WHERE id=$1',
   clockRecord: `SELECT d.branch_id FROM device_users u JOIN devices d ON d.id=u.device_id WHERE u.id=$1
@@ -32,9 +32,10 @@ export class BranchAccessControl implements AccessControl {
     if (principal.role === 'employee') throw new AppError('El recurso no está disponible para tu cuenta.', 'FORBIDDEN');
     const rows = (await this.database.query<{ branch_id: string | null }>(resourceQueries[kind], [id])).rows;
     if (!rows.length || rows.some(row => !canAccessBranch(principal, row.branch_id))) throw new AppError('El recurso no está disponible en tus sucursales autorizadas.', 'FORBIDDEN');
-    if (kind === 'clockRecord' && principal.role !== 'admin') {
-      const owner = (await this.database.query<{ employee_id: string | null }>('SELECT employee_id FROM device_users WHERE id=$1',[id])).rows[0];
-      if (owner?.employee_id) await this.assertEmployeeHistory(owner.employee_id);
+    if (kind === 'clockRecord') {
+      const owner = (await this.database.query<{ employee_id: string | null; discarded_at: Date | null }>('SELECT u.employee_id,e.discarded_at FROM device_users u LEFT JOIN employees e ON e.id=u.employee_id WHERE u.id=$1',[id])).rows[0];
+      if (owner?.discarded_at) throw new AppError('El registro está eliminado de la lista.', 'FORBIDDEN');
+      if (owner?.employee_id && principal.role !== 'admin') await this.assertEmployeeHistory(owner.employee_id);
     }
   }
   async assertEmployeeHistory(id: string) {

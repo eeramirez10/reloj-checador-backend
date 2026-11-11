@@ -4,16 +4,18 @@ import type { DailyEvaluation } from './schedule-evaluator.js';
 import { dateAtLocalTime } from './local-date.js';
 import { pendingOvertime } from './overtime.js';
 import { latenessMinutes } from './tolerance.js';
+import { isOffsiteWork } from './leave.js';
 
 export function authorizationsForDay(requests: LeaveRequest[], date: string): LeaveAuthorization[] {
   return requests.filter((request) => request.status === 'approved').flatMap((request) => request.details.days
     .filter((day) => day.date === date).map((day) => ({ requestId: request.id, kind: request.kind, paid: request.paid,
-      useVacation: request.useVacation, reason: request.reason, authorizedTime: request.authorizedTime, start: day.start, end: day.end })));
+       useVacation: request.useVacation, reason: request.reason, authorizedTime: request.authorizedTime,clientName:request.clientName??null,fullDay:request.fullDay??true, start: day.start, end: day.end })));
 }
 
-export function authorizedSchedule(schedule: ScheduleSettings, authorizations: LeaveAuthorization[]): ScheduleSettings {
+export function authorizedSchedule(schedule: ScheduleSettings, authorizations: LeaveAuthorization[],observedExit?:string): ScheduleSettings {
   const permittedEntry = authorizations.find((item) => item.kind === 'late_arrival')?.authorizedTime;
-  const permittedExit = authorizations.find((item) => item.kind === 'early_exit')?.authorizedTime;
+  const departure=authorizations.find(item=>item.kind==='early_exit');
+  const permittedExit = departure?.authorizedTime ?? (departure && observedExit ? observedExit : undefined);
   const entryTime = permittedEntry && permittedEntry > schedule.entryTime ? permittedEntry : schedule.entryTime;
   const exitTime = permittedExit && permittedExit < schedule.exitTime ? permittedExit : schedule.exitTime;
   if (entryTime >= exitTime) return schedule;
@@ -26,6 +28,14 @@ export function applyLeaveAuthorizations(day: DailyEvaluation, authorizations: L
   policy: PolicySettings | undefined, timeZone: string): void {
   if (!authorizations.length) return;
   day.leaveAuthorizations = authorizations;
+  if(authorizations.some(item=>isOffsiteWork(item.kind))) {
+    day.status='authorized_work';day.incidents=[];day.issues=[];day.missingMovements=[];
+    // La autorización no acredita horas ni convierte marcas intermedias en comida.
+    delete day.workedMinutes;delete day.mealDeparture;delete day.mealReturn;delete day.expectedMealReturn;delete day.mealMinutes;
+    day.punches=day.punches.map(punch=>['meal_departure','meal_return','outside_schedule'].includes(punch.movement)?{...punch,movement:'unclassified'}:punch);
+    if(day.overtime) day.overtime=pendingOvertime(day.punches.length?'pending':'no_records','Trabajo externo autorizado: las horas extras requieren evidencia de tiempo trabajado.');
+    return;
+  }
   if (authorizations.some((item) => item.kind === 'absence')) {
     day.incidents = [];
     if (!day.punches.length && !day.routes?.length) {
@@ -41,7 +51,7 @@ export function applyLeaveAuthorizations(day: DailyEvaluation, authorizations: L
     const weekday = new Date(`${day.date}T12:00:00Z`).getUTCDay() || 7;
     const continuingRoute = day.routes?.some((route) => Date.parse(route.segmentStart) <= Date.parse(arrival.end)
       && (!route.segmentEnd || Date.parse(route.segmentEnd) > Date.parse(arrival.end)));
-    if (entryLog && policy && !continuingRoute && schedule.workDays.includes(weekday)) {
+    if (arrival.authorizedTime && entryLog && policy && !continuingRoute && schedule.workDays.includes(weekday)) {
       const expected = dateAtLocalTime(day.date, schedule.entryTime, timeZone).getTime();
       const actual = Date.parse(entryLog.occurredAt);
       const covered = Math.max(0, Math.min(actual, Date.parse(arrival.end)) - Math.max(expected, Date.parse(arrival.start)));
@@ -55,8 +65,9 @@ export function applyLeaveAuthorizations(day: DailyEvaluation, authorizations: L
 export function unauthorizedEarlyExit(date: string, exit: string | null, schedule: ScheduleSettings | null,
   authorizations: LeaveAuthorization[], timeZone: string): number | null {
   if (!exit || !schedule) return null;
-  if (authorizations.some((item) => item.kind === 'absence')) return 0;
+  if (authorizations.some((item) => item.kind === 'absence' || isOffsiteWork(item.kind))) return 0;
   const permitted = authorizations.find((item) => item.kind === 'early_exit');
+  if(permitted && !permitted.authorizedTime) return 0;
   const expected = dateAtLocalTime(date, schedule.exitTime, timeZone).getTime();
   const actual = Date.parse(exit);
   const covered = permitted ? Math.max(0, Math.min(expected, Date.parse(permitted.end)) - Math.max(actual, Date.parse(permitted.start))) : 0;

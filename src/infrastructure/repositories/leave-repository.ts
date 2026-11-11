@@ -12,13 +12,19 @@ import type { CountryCode } from 'libphonenumber-js';
 import { accessContext, branchScopeSql } from '../security/access-context.js';
 import type { EmailSettings } from '../config/email.js';
 import { enqueueEmail } from './email-outbox.js';
-import type { AuthAccount } from '../../domain/entities/auth.js';
+import type { AuthAccount,AuthPrincipal } from '../../domain/entities/auth.js';
 
 export class PrismaLeaveSession implements LeaveSession {
   constructor(private readonly client: Queryable, private readonly recalculate: () => Promise<void>, private readonly country: CountryCode = 'MX', private readonly email?: EmailSettings) {}
 
   async decisionAccount(id: string) {
     return (await this.client.query<Pick<AuthAccount,'role' | 'employeeId' | 'isActive' | 'version'>>(`SELECT role,employee_id AS "employeeId",is_active AS "isActive",version FROM auth_accounts WHERE id=$1 FOR SHARE`,[id])).rows[0];
+  }
+
+  async cancellationBranches(id:string) {
+    return (await this.client.query<{branch_id:string|null}>(`SELECT branch_id FROM leave_requests WHERE id=$1
+      UNION SELECT e.branch_id FROM employees e JOIN leave_requests r ON r.employee_id=e.id WHERE r.id=$1
+      UNION SELECT (day->>'branchId')::uuid FROM leave_requests r CROSS JOIN LATERAL jsonb_array_elements(r.details->'days') day WHERE r.id=$1`,[id])).rows.map(row=>row.branch_id);
   }
 
   async context(employeeId: string, from: string, to: string): Promise<LeaveContext> {
@@ -64,21 +70,22 @@ export class PrismaLeaveSession implements LeaveSession {
   }
   async create(input: LeaveInput, managerId: string, branchId: string, details: LeaveDetails, sourceKey: string) {
     const id = randomUUID();
-    await this.client.query(`INSERT INTO leave_requests (id,employee_id,manager_id,branch_id,kind,from_date,to_date,authorized_time,paid,use_vacation,reason,details,source_key)
-      VALUES ($1,$2,$3,$4,$5,$6::date,$7::date,$8,$9,$10,$11,$12::jsonb,$13)`,
-    [id, input.employeeId, managerId, branchId, input.kind, input.from, input.to, input.authorizedTime, input.paid, input.useVacation, input.reason, JSON.stringify(details), sourceKey]);
+    await this.client.query(`INSERT INTO leave_requests (id,employee_id,manager_id,branch_id,kind,from_date,to_date,authorized_time,paid,use_vacation,reason,details,source_key,client_name,full_day,replaces_request_id)
+       VALUES ($1,$2,$3,$4,$5,$6::date,$7::date,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16)`,
+    [id, input.employeeId, managerId, branchId, input.kind, input.from, input.to, input.authorizedTime, input.paid, input.useVacation, input.reason, JSON.stringify(details), sourceKey,input.clientName??null,input.fullDay??true,input.replacesRequestId??null]);
     return this.find(id);
   }
-  async resolve(id: string, status: LeaveStatus, actorId: string) {
+  async resolve(id: string, status: LeaveStatus, actorId: string|null) {
     await this.client.query('UPDATE leave_requests SET status=$2,resolved_by=$3,resolved_at=NOW(),version=version+1 WHERE id=$1', [id, status, actorId]);
     return this.find(id);
   }
-  async event(request: LeaveRequest, kind: LeaveEvent['kind'], comments: string, actorId?: string) {
+  async event(request: LeaveRequest, kind: LeaveEvent['kind'], comments: string, actorId?: string|null,previousStatus?:LeaveStatus,actorAccount?:AuthPrincipal) {
     const recipientId = kind === 'created' ? request.managerId : request.employeeId;
     const recipient = await this.profile(recipientId);
     const eventId = randomUUID();
-    await this.client.query(`INSERT INTO leave_request_events (id,request_id,kind,actor_employee_id,comments,recipient_employee_id,recipient_phone,actor_account_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [eventId, request.id, kind, actorId ?? null, comments, recipientId, recipient.whatsappPhone, accessContext.current()?.id ?? null]);
+    const account=actorAccount??accessContext.current();
+    await this.client.query(`INSERT INTO leave_request_events (id,request_id,kind,actor_employee_id,comments,recipient_employee_id,recipient_phone,actor_account_id,previous_status,actor_role)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [eventId, request.id, kind, actorId ?? null, comments, recipientId, recipient.whatsappPhone, account?.id ?? null,previousStatus??null,account?.role??null]);
     if (this.email?.encryptionKey) {
       const contact = (await this.client.query<{ email: string | null }>('SELECT email FROM employee_contacts WHERE employee_id=$1',[recipientId])).rows[0];
       if (contact?.email) {
@@ -86,7 +93,7 @@ export class PrismaLeaveSession implements LeaveSession {
         const url = new URL('my/permissions',this.email.publicUrl.replace(/\/?$/,'/'));
         url.searchParams.set('requestId',request.id);
         await enqueueEmail(this.client,this.email,{ employeeId: recipientId,recipient: contact.email,kind: 'leave',eventId,expiresAt: new Date(Date.now()+7*24*60*60*1000),
-          content: { subject: labels[kind],text: `${labels[kind]}\n\nEmpleado: ${request.details.employeeName}\nPeriodo: ${request.from} al ${request.to}\n${comments ? `Comentarios: ${comments}\n` : ''}\nRevisa la solicitud e inicia sesión en el sistema:\n${url}\n\nRecursos Humanos` } });
+          content: { subject: labels[kind],text: `${labels[kind]}\n\nEmpleado: ${request.details.employeeName}\nPeriodo: ${request.from} al ${request.to}\n${request.clientName?`Cliente: ${request.clientName}\n`:''}${comments ? `Comentarios: ${comments}\n` : ''}\nRevisa la solicitud e inicia sesión en el sistema:\n${url}\n\nRecursos Humanos` } });
       }
     }
   }
@@ -128,7 +135,7 @@ export class PrismaLeaveRepository implements LeaveRepository {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
       const request = await new PrismaLeaveSession(client, async () => {}).find(id);
       const events = (await client.query<LeaveEvent>(`SELECT e.id,e.kind,actor_employee_id AS "actorEmployeeId",actor_account_id AS "actorAccountId",
-        (SELECT name FROM auth_accounts WHERE id=actor_account_id) AS "actorAccountName",comments,
+        (SELECT name FROM auth_accounts WHERE id=actor_account_id) AS "actorAccountName",(SELECT name FROM employees WHERE id=actor_employee_id) AS "actorEmployeeName",e.actor_role AS "actorRole",e.previous_status AS "previousStatus",comments,
         recipient_employee_id AS "recipientEmployeeId",recipient_phone AS "recipientPhone",notification_status AS "notificationStatus",e.created_at AS "createdAt",
         m.state AS "emailStatus",m.recipient AS "recipientEmail" FROM leave_request_events e LEFT JOIN email_outbox m ON m.event_id=e.id WHERE request_id=$1 ORDER BY e.created_at,e.id`, [id])).rows;
       return { request, events };

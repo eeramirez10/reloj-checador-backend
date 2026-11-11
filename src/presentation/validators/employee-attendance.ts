@@ -7,7 +7,7 @@ const validPeriod = ({ from, to }: { from: string; to: string }) => from <= to &
 const periodMessage = 'Selecciona un periodo válido de hasta 366 días.';
 
 export const employeeAttendanceQuerySchema = z.object(periodFields).refine(validPeriod, periodMessage);
-const branchFields = { ...periodFields, branchId: z.string().uuid(), employeeStatus: z.enum(['active','inactive']),companyId: companyFilterSchema };
+const branchFields = { ...periodFields, branchId: z.string().uuid(), employeeStatus: z.enum(['active','inactive']),companyId: companyFilterSchema,search:z.string().trim().max(120).optional() };
 export const branchAttendanceQuerySchema = z.object({ ...branchFields,
   page: z.coerce.number().int().min(1).max(100_000).default(1),
   limit: z.coerce.number().int().min(1).max(10).default(5),

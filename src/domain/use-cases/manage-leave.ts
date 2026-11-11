@@ -4,16 +4,25 @@ import type { LeaveDay, LeaveFilters, LeaveInput, LeavePreview, LeaveProfileInpu
 import type { LeaveRepository, LeaveSession } from '../repositories/leave-repository.js';
 import { dayContext } from './get-employee-attendance.js';
 import { requireActiveEmployee, saveEmployeeLeaveProfile } from './save-employee-leave-profile.js';
-import type { AuthPrincipal } from '../entities/auth.js';
+import { canAccessBranch,type AuthPrincipal } from '../entities/auth.js';
 import { assertLeaveDecision } from '../entities/leave-access.js';
+import { isOffsiteWork } from '../entities/leave.js';
+import { leaveOverlaps } from '../entities/leave-overlap.js';
 
 async function preview(session: LeaveSession, input: LeaveInput, fingerprint: (value: string) => string): Promise<LeavePreview> {
   const { employee, profile, history } = await session.context(input.employeeId, input.from, input.to);
   requireActiveEmployee(employee);
+  if(input.replacesRequestId) {
+    const previous=await session.find(input.replacesRequestId);
+    if(previous.employeeId!==input.employeeId || previous.status!=='cancelled') throw new ConfigurationError('La solicitud corregida debe reemplazar un permiso cancelado del mismo empleado.');
+  }
   if (!profile.managerId) throw new ConfigurationError('Asigna un jefe directo al empleado antes de solicitar un permiso.');
   const manager = (await session.context(profile.managerId, input.from, input.to)).employee;
   requireActiveEmployee(manager);
   if (input.useVacation && (input.kind !== 'absence' || !input.paid)) throw new ConfigurationError('Los días de vacaciones solo se usan para faltar con goce de sueldo.');
+  if(isOffsiteWork(input.kind) && (!input.paid || input.useVacation)) throw new ConfigurationError('El trabajo autorizado no consume vacaciones y es con goce de sueldo.');
+  if(input.authorizedTime && !['late_arrival','early_exit'].includes(input.kind)) throw new ConfigurationError('Este tipo de permiso no utiliza horario.');
+  if(input.kind!=='client_visit' && input.fullDay===false) throw new ConfigurationError('La modalidad abierta corresponde a visitas a cliente.');
   if (employee.hireDate && input.from < employee.hireDate) throw new ConfigurationError('El permiso no puede comenzar antes de la fecha de alta.');
   const days: LeaveDay[] = [];
   for (let date = input.from; date <= input.to; date = addDays(date, 1)) {
@@ -21,18 +30,18 @@ async function preview(session: LeaveSession, input: LeaveInput, fingerprint: (v
     if (!branch || !schedule) throw new ConfigurationError(`Configura sucursal y jornada laboral para el ${date}.`);
     if (!schedule.settings.workDays.includes(new Date(`${date}T12:00:00Z`).getUTCDay() || 7)) continue;
     const { entryTime, exitTime } = schedule.settings;
-    if (input.kind !== 'absence' && (!input.authorizedTime || input.authorizedTime <= entryTime || input.authorizedTime >= exitTime)) {
+    if (input.authorizedTime && (input.authorizedTime <= entryTime || input.authorizedTime >= exitTime)) {
       throw new ConfigurationError(`La hora autorizada debe estar entre ${entryTime} y ${exitTime} para el ${date}.`);
     }
-    const startTime = input.kind === 'early_exit' ? input.authorizedTime! : entryTime;
-    const endTime = input.kind === 'late_arrival' ? input.authorizedTime! : exitTime;
+    const startTime = input.kind === 'early_exit' && input.authorizedTime ? input.authorizedTime : entryTime;
+    const endTime = input.kind === 'late_arrival' && input.authorizedTime ? input.authorizedTime : exitTime;
     days.push({ date, branchId: branch.id, branchName: branch.name, timeZone: branch.timeZone,
       scheduledEntry: entryTime, scheduledExit: exitTime,
       start: dateAtLocalTime(date, startTime, branch.timeZone).toISOString(), end: dateAtLocalTime(date, endTime, branch.timeZone).toISOString() });
   }
   if (!days.length) throw new ConfigurationError('El rango seleccionado no incluye días laborables.');
   const overlapping = await session.overlapping(employee.id, input.from, input.to);
-  if (overlapping.some((request) => request.details.days.some((other) => days.some((day) => day.start < other.end && other.start < day.end)))) {
+  if (overlapping.some(request=>leaveOverlaps(input,days,request))) {
     throw new ConflictError('Ya existe un permiso pendiente o aprobado que coincide con este periodo.');
   }
   const details = { employeeName: employee.name, employeeNumber: employee.employeeNumber ?? null, managerName: manager.name, branchName: days[0].branchName, days };
@@ -81,10 +90,15 @@ export class ManageLeave {
       const cancellation = input.action === 'cancel';
       if (cancellation ? !['pending', 'approved'].includes(request.status) : request.status !== 'pending') throw new ConflictError('La solicitud ya fue resuelta.');
       const actorEmployeeId = assertLeaveDecision(account,request,input.action);
-      const allowedActors = cancellation ? [request.employeeId, request.managerId] : [request.managerId];
-      if (!allowedActors.includes(actorEmployeeId)) throw new ConfigurationError('La resolución debe registrarse a nombre del jefe responsable; el empleado también puede cancelar.');
-      const actor = (await session.context(actorEmployeeId, request.from, request.to)).employee;
-      requireActiveEmployee(actor);
+      const administrative=cancellation && ['admin','hr'].includes(account.role);
+      if(administrative && (request.status==='approved' || account.employeeId!==request.employeeId)) {
+        const branches=await session.cancellationBranches(id);
+        if(branches.some(branch=>!canAccessBranch(account,branch))) throw new AppError('La cancelación requiere acceso a todas las sucursales del permiso.','FORBIDDEN');
+      }
+      if(!administrative) {
+        if(!actorEmployeeId) throw new AppError('Vincula tu cuenta a un empleado.','FORBIDDEN');
+        requireActiveEmployee((await session.context(actorEmployeeId,request.from,request.to)).employee);
+      }
       if (input.action !== 'approve' && !input.comments.trim()) throw new ConfigurationError('Escribe el motivo de rechazo o cancelación.');
       if (input.action === 'approve') await this.validateApproval(session, request);
       const vacationDays = request.useVacation ? request.details.days.length : 0;
@@ -92,7 +106,7 @@ export class ManageLeave {
       if (vacationDays && cancellation && request.status === 'approved') await session.vacationMovement(request.employeeId, vacationDays, 'return', input.comments, request.id);
       const status = input.action === 'approve' ? 'approved' : input.action === 'reject' ? 'rejected' : 'cancelled';
       const updated = await session.resolve(id, status, actorEmployeeId);
-      await session.event(updated, status, input.comments, actorEmployeeId);
+      await session.event(updated, status, input.comments, actorEmployeeId,request.status,account);
       if (status === 'approved' || request.status === 'approved') await session.recalculateAttendance();
       return updated;
     });
@@ -101,6 +115,8 @@ export class ManageLeave {
   private async validateApproval(session: LeaveSession, request: LeaveRequest) {
     const { employee, profile, history } = await session.context(request.employeeId, request.from, request.to);
     requireActiveEmployee(employee);
+    const overlaps=await session.overlapping(request.employeeId,request.from,request.to);
+    if(overlaps.some(other=>other.id!==request.id && leaveOverlaps(request,request.details.days,other))) throw new ConflictError('Otro permiso coincide con este periodo. Actualiza las solicitudes.');
     if (request.useVacation && profile.vacationBalance < request.details.days.length) throw new ConflictError('El saldo de vacaciones ya no es suficiente.');
     for (let date = request.from; date <= request.to; date = addDays(date, 1)) {
       const day = request.details.days.find((item) => item.date === date);

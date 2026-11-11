@@ -27,11 +27,15 @@ Solo restablece cuentas administradoras existentes. Genera otra contraseña temp
 | --- | --- | --- | --- | --- |
 | Consultar empleados, asistencia y reportes/PDF | Todas | Asignadas | Asignadas | Solo asistencia propia |
 | Aprobar/rechazar permisos | No | No | Solo si es el jefe vinculado | Solo si es el jefe vinculado |
+| Cancelar permisos aprobados con motivo | Sí | Asignadas | No | No |
+| Retirar una solicitud propia pendiente | Si está vinculado | Si está vinculado | Sí | Sí |
 | Consultar permisos asignados como jefe entre sucursales | Según alcance | Según alcance | Sí | Sí |
 | Gestionar empleados, horarios, vacaciones y adscripciones | Sí | Asignadas | No | No |
 | Importar checadas, sincronizar usuarios, marcas y fotos | Sí | Asignadas | No | No |
 | Administrar cuentas, crear/editar sucursales y dispositivos | Sí | No | No | No |
 | Generar acceso de empleado desde su expediente | Sí | Asignadas | No | No |
+| Crear/editar catálogo de empresas | Sí | No | No | No |
+| Asignar empleados a empresas, individualmente o por lote | Sí | Asignadas | No | No |
 | Ajustar hora o rol de administrador del reloj | Sí | No | No | No |
 | Recálculo global y documentación API | Sí | No | No | No |
 
@@ -40,6 +44,8 @@ RH y encargados deben tener al menos una sucursal explícita; una lista vacía n
 Los filtros de lectura se aplican en SQL antes de límites, paginación y totales. Se validan además los IDs de recursos y las referencias de cuerpos/consultas, incluyendo origen y destino de reasignaciones. Los relojes y perfiles históricos de otra sucursal no se exponen en el catálogo. Un periodo de asistencia que abarca una sucursal no autorizada se rechaza; hay que consultar un periodo permitido o asignar ambas sucursales. La edición y el historial completo de un empleado trasladado requieren acceso a sus sucursales históricas.
 
 La identidad del operador proviene de su sesión y de su empleado vinculado. La resolución revalida rol, estado, vínculo y versión de la cuenta bajo bloqueo transaccional. Los eventos de permisos y movimientos de vacaciones guardan `actor_account_id`; `actor_employee_id` se deriva del vínculo y no se acepta del navegador. El detalle muestra la cuenta que ejecutó la acción. La auditoría general registra operaciones sin copiar cuerpos, contraseñas, imágenes ni secretos.
+
+Una cancelación administrativa no exige que RH/admin esté vinculado a un empleado. Conserva cuenta, rol y estado anterior junto con el motivo; devuelve vacaciones y recalcula de forma atómica. La corrección crea otra solicitud vinculada, pendiente de autorización del jefe. Ver [offsite-leave.md](offsite-leave.md).
 
 ## Sesiones y configuración
 

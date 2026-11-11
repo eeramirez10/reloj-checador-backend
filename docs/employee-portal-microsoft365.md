@@ -8,7 +8,8 @@
 - Las solicitudes guardan su jefe responsable al crearse. Cambiar el jefe del expediente no reasigna solicitudes anteriores.
 - Un jefe con cuenta `employee` o `manager` puede aprobar/rechazar únicamente las solicitudes que lo tienen asignado, incluso entre sucursales.
 - Los roles `hr` y `admin` no pueden aprobar ni rechazar, aunque estén vinculados al jefe asignado. No existe excepción de administrador.
-- El solicitante o jefe responsable pueden cancelar con motivo, según las reglas existentes. Cancelar un permiso aprobado devuelve las vacaciones consumidas.
+- El solicitante puede retirar su solicitud pendiente con motivo. RH/admin pueden cancelar solicitudes pendientes o aprobadas dentro de su alcance; un permiso aprobado solo puede cancelarse administrativamente. Se conservan la aprobación y el historial, se devuelven las vacaciones consumidas y se recalcula la asistencia en una sola transacción.
+- Una solicitud cancelada puede originar una nueva solicitud corregida, vinculada a la anterior y sujeta a otra aprobación. Los tipos de trabajo autorizado y las reglas completas están en [offsite-leave.md](offsite-leave.md).
 - Los empleados ven su asistencia de hoy, su tarjeta/PDF, sus solicitudes, las solicitudes asignadas como jefe y su perfil.
 - Cada empleado puede editar su WhatsApp, teléfono alterno y tipo de sangre. RH/admin también pueden hacerlo dentro de sus alcances. Correo, jefe y datos laborales se administran por RH/admin.
 

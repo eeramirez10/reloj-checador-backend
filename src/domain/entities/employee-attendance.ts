@@ -31,6 +31,7 @@ export interface EmployeeAttendanceDay {
   incidents: DailyEvaluation['incidents'];
 }
 export interface EmployeeAttendanceSummary {
+  authorizedWorkDays?: number;
   authorizedAbsenceDays?: number;
   recordedDays: number;
   completeDays: number;

@@ -10,7 +10,7 @@ class PrismaEmployeeNameSession implements EmployeeNameSession {
       e.name_split_method AS "splitMethod", e.employee_number AS "employeeNumber",
       COALESCE((SELECT array_agg(u.name ORDER BY (u.binding_status = 'active') DESC, u.synced_at DESC) FILTER (WHERE u.name IS NOT NULL)
         FROM device_users u WHERE u.employee_id = e.id), ARRAY[]::text[]) AS "clockNames"
-      FROM employees e WHERE e.identification_status <> 'merged' AND ((e.first_name IS NULL AND e.last_name IS NULL)
+      FROM employees e WHERE e.discarded_at IS NULL AND e.identification_status <> 'merged' AND ((e.first_name IS NULL AND e.last_name IS NULL)
         OR ($1::boolean AND e.name_split_method IN ('single_name','clock_reference','given_first','surname_first'))) FOR UPDATE OF e`, [refreshAutomatic])).rows;
   }
 

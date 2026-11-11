@@ -18,7 +18,7 @@ export class PrismaEmployeeSchedulingDatasource implements EmployeeSchedulingDat
 
   async lock(employeeId: string): Promise<void> {
     await this.database.query('SELECT pg_advisory_xact_lock(hashtext($1))::text', [`employee-scheduling:${employeeId}`]);
-    const employee = (await this.database.query<{ identification_status: string }>('SELECT identification_status FROM employees WHERE id=$1 FOR UPDATE', [employeeId])).rows[0];
+    const employee = (await this.database.query<{ identification_status: string }>('SELECT identification_status FROM employees WHERE id=$1 AND discarded_at IS NULL FOR UPDATE', [employeeId])).rows[0];
     if (!employee || employee.identification_status === 'merged') throw new ConfigurationError('Empleado no encontrado o ficha histórica.');
   }
 
@@ -28,7 +28,7 @@ export class PrismaEmployeeSchedulingDatasource implements EmployeeSchedulingDat
         (SELECT MIN((a.occurred_at AT TIME ZONE COALESCE(ab.time_zone,b.time_zone,'America/Mexico_City'))::date)::text
           FROM device_users u JOIN attendance_logs a ON a.device_id=u.device_id AND a.user_id=u.device_user_id
           LEFT JOIN branches ab ON ab.id=a.branch_id WHERE u.employee_id=e.id) AS "firstAttendanceDate"
-      FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.id=$1 AND e.identification_status <> 'merged'`, [employeeId])).rows[0];
+      FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.id=$1 AND e.discarded_at IS NULL AND e.identification_status <> 'merged'`, [employeeId])).rows[0];
     if (!employee) throw new ConfigurationError('Empleado no encontrado.');
     const day = date ?? formatDateTimeInTimeZone(new Date(), employee.timeZone).slice(0, 10);
     const branchHistory = (await this.database.query<{ branchId: string; effectiveFrom: string }>(

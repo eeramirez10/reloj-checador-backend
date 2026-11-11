@@ -35,6 +35,9 @@ import type { EmployeePortalRepository } from '../domain/repositories/employee-p
 import type { EmployeeContactRepository } from '../domain/repositories/employee-contact-repository.js';
 import type { IssueEmployeeAccess } from '../domain/use-cases/issue-employee-access.js';
 import type { CompanyRepository } from '../domain/repositories/company-repository.js';
+import type { DiscardPendingEmployee } from '../domain/use-cases/discard-pending-employee.js';
+import type { CompanyEmployeeRepository } from '../domain/repositories/company-employee-repository.js';
+import type { AssignCompanyEmployees } from '../domain/use-cases/assign-company-employees.js';
 
 export interface WhatsAppServices {
   scope: WhatsAppScope; security: WhatsAppWebhookSecurity; receive: ReceiveWhatsAppMessage; send: SendWhatsAppMessage;
@@ -44,6 +47,9 @@ export interface WhatsAppServices {
 export interface ApplicationServices {
   auth: ManageAuth;
   companies: CompanyRepository;
+  discardEmployee: DiscardPendingEmployee;
+  companyEmployees:CompanyEmployeeRepository;
+  assignCompanyEmployees:AssignCompanyEmployees;
   portal: EmployeePortalRepository;
   contacts: EmployeeContactRepository;
   employeeAccess: IssueEmployeeAccess;

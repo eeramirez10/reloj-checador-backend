@@ -114,6 +114,20 @@ integration('company classification, permissions and report snapshots',() => {
     await call(hr,'GET',`/attendance/cards/export?${reportQuery(companyA.id).replace(branches[0],branches[1])}`,undefined,403);
     expect(await originalAttendance()).toEqual(before);
   });
+  it('searches names and clock IDs before pagination and exports with the same branch and company filters',async()=>{
+    const query=reportQuery(companyA.id);
+    const byName=await call(hr,'GET',`/attendance/cards?${query}&search=person%205`);
+    expect(byName.totalEmployees).toBe(1);expect(byName.cards[0].employee.id).toBe(employees[5]);
+    const byClock=await call(hr,'GET',`/attendance/cards/export?${query}&search=6`);
+    expect(byClock.cards.map((card:any)=>card.employee.id)).toEqual([employees[5]]);
+    const all=await call(hr,'GET',`/attendance/cards?${query}&search=%20PERSON%20&limit=5&page=2`);
+    const exported=await call(hr,'GET',`/attendance/cards/export?${query}&search=PERSON`);
+    expect(all).toMatchObject({totalEmployees:6,search:'PERSON'});expect(all.cards).toHaveLength(1);expect(exported.cards).toHaveLength(6);
+    expect((await call(hr,'GET',`/attendance/cards?${query}&search=%25`)).totalEmployees).toBe(0);
+    expect((await call(hr,'GET',`/attendance/cards?${query}&search=9`)).totalEmployees).toBe(0);
+    expect((await call(hr,'GET',`/attendance/cards?${query}&search=%20%20`)).totalEmployees).toBe(6);
+    await call(hr,'GET',`/attendance/cards?${query}&search=${'x'.repeat(121)}`,undefined,400);
+  });
   it('filters overtime employees and aggregate totals before pagination and exports',async () => {
     const first = await call(hr,'GET',`/attendance/overtime?${reportQuery(companyA.id)}&limit=5&page=1`);
     const second = await call(hr,'GET',`/attendance/overtime?${reportQuery(companyA.id)}&limit=5&page=2`);
