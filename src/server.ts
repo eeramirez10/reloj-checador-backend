@@ -3,7 +3,7 @@ import { env } from './infrastructure/config/env.js';
 import { initializeOrganization } from './infrastructure/database/initialize-organization.js';
 
 async function startServer(): Promise<void> {
-  const { app, database, employeeNames, scheduler, whatsappWorker } = await buildApp();
+  const { app, database, employeeNames, scheduler, whatsappWorker, emailWorker } = await buildApp();
   let closing = false;
   const shutdown = async (error?: unknown) => {
     if (closing) return;
@@ -18,7 +18,9 @@ async function startServer(): Promise<void> {
     await employeeNames.populateMissing();
     await app.listen({ host: env.HOST, port: env.PORT });
     scheduler.start();
+    if (!env.SYNC_ENABLED) app.log.info('Sincronización automática de relojes desactivada.');
     whatsappWorker?.start();
+    emailWorker?.start();
     process.once('SIGINT', () => { void shutdown(); });
     process.once('SIGTERM', () => { void shutdown(); });
     process.once('uncaughtException', (error) => { void shutdown(error); });

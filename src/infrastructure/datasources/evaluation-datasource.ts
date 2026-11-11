@@ -4,6 +4,7 @@ import type { EvaluationSession, EvaluationSnapshot, EvaluationWrite, SubjectLog
 import type { CalculatedDeduction, DailyEvaluation } from '../../domain/entities/schedule-evaluator.js';
 import type { BranchPolicy, WorkSchedule } from '../../domain/entities/organization.js';
 import type { ReportFilters } from '../../domain/dtos/filters.js';
+import { companyFilterSql } from './company-filter.js';
 import type { Database, Queryable } from '../database/database.js';
 import type { Prisma } from '../database/generated/client.js';
 import type { EmployeeScheduleVersion } from '../../domain/entities/employee-scheduling.js';
@@ -102,7 +103,7 @@ export class PrismaEvaluationDatasource implements EvaluationDatasource {
 
   async report(filters: ReportFilters) {
     return (await this.database.query(`SELECT ev.id, ev.subject_id AS "subjectId", ev.employee_id AS "employeeId", ev.device_user_id AS "deviceUserId",
-      ev.date::text, ev.branch_id AS "branchId", ev.result,
+      ev.date::text, ev.branch_id AS "branchId", ev.result,e.company_id AS "companyId",c.name AS "companyName",
       (SELECT jsonb_build_object('deviceId', a.device_id, 'userId', a.user_id, 'hasPhoto', TRUE)
         FROM (SELECT value ->> 'id' AS log_id FROM jsonb_array_elements(ev.result -> 'punches')
           UNION SELECT value ->> 'entryLogId' FROM jsonb_array_elements(COALESCE(ev.result -> 'routes','[]'::jsonb))
@@ -110,21 +111,25 @@ export class PrismaEvaluationDatasource implements EvaluationDatasource {
         JOIN attendance_logs a ON a.id = sources.log_id::uuid
         JOIN device_user_photos p ON p.device_id = a.device_id AND p.device_user_id = a.user_id
         ORDER BY a.occurred_at DESC, a.id DESC LIMIT 1) AS photo
-      FROM attendance_evaluations ev WHERE (${branchScopeSql('ev.branch_id')}) AND ev.active AND ev.date BETWEEN $1::date AND $2::date
+      FROM attendance_evaluations ev LEFT JOIN employees e ON e.id=ev.employee_id LEFT JOIN companies c ON c.id=e.company_id
+      WHERE (${branchScopeSql('ev.branch_id')}) AND ev.active AND ev.date BETWEEN $1::date AND $2::date
       AND ($3::uuid IS NULL OR ev.branch_id = $3) AND ($4::uuid IS NULL OR ev.subject_id = $4)
+      AND ${companyFilterSql('e.company_id',5)}
       ORDER BY ev.date DESC,
         ((ev.result ->> 'entry')::timestamptz AT TIME ZONE COALESCE(ev.result ->> 'timeZone', 'America/Mexico_City')) ASC NULLS LAST,
         ev.id`,
-    [filters.from, filters.to, filters.branchId ?? null, filters.subjectId ?? null])).rows;
+    [filters.from, filters.to, filters.branchId ?? null, filters.subjectId ?? null,filters.companyId ?? null])).rows;
   }
 
   async deductions(filters: ReportFilters) {
     return (await this.database.query(`SELECT d.id, d.subject_id AS "subjectId", d.category, d.salary_days AS "salaryDays",
       d.window_start::text AS "windowStart", d.window_end::text AS "windowEnd", d.incident_ids AS "incidentIds", d.voided_at AS "voidedAt",
-      i.occurred_at AS "occurredAt", ev.result ->> 'name' AS name, ev.result ->> 'branchName' AS "branchName", ev.result ->> 'timeZone' AS "timeZone"
+      i.occurred_at AS "occurredAt", ev.result ->> 'name' AS name, ev.result ->> 'branchName' AS "branchName", ev.result ->> 'timeZone' AS "timeZone",
+      e.company_id AS "companyId",c.name AS "companyName"
       FROM attendance_deductions d JOIN attendance_incidents i ON i.id = d.trigger_incident_id
-      JOIN attendance_evaluations ev ON ev.id = i.evaluation_id WHERE (${branchScopeSql('ev.branch_id')}) AND ev.date BETWEEN $1::date AND $2::date
-      AND ($3::uuid IS NULL OR ev.branch_id = $3) AND ($4::uuid IS NULL OR d.subject_id = $4) ORDER BY i.occurred_at DESC`,
-    [filters.from, filters.to, filters.branchId ?? null, filters.subjectId ?? null])).rows;
+      JOIN attendance_evaluations ev ON ev.id = i.evaluation_id LEFT JOIN employees e ON e.id=ev.employee_id LEFT JOIN companies c ON c.id=e.company_id
+      WHERE (${branchScopeSql('ev.branch_id')}) AND ev.date BETWEEN $1::date AND $2::date
+      AND ($3::uuid IS NULL OR ev.branch_id = $3) AND ($4::uuid IS NULL OR d.subject_id = $4) AND ${companyFilterSql('e.company_id',5)} ORDER BY i.occurred_at DESC`,
+    [filters.from, filters.to, filters.branchId ?? null, filters.subjectId ?? null,filters.companyId ?? null])).rows;
   }
 }

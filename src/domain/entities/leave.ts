@@ -22,12 +22,13 @@ export interface LeaveProfileInput {
 }
 export interface VacationMovement { id: string; requestId: string | null; kind: 'adjustment' | 'consumption' | 'return'; days: number; balanceAfter: number; reason: string; createdAt: string }
 export interface LeaveEvent {
+  emailStatus?: string | null; recipientEmail?: string | null;
   actorAccountId?: string | null; actorAccountName?: string | null;
   id: string; kind: 'created' | Exclude<LeaveStatus, 'pending'>; actorEmployeeId: string | null; comments: string;
   recipientEmployeeId: string; recipientPhone: string | null; notificationStatus: 'awaiting_configuration'; createdAt: string;
 }
 export interface LeavePreview { input: LeaveInput; managerId: string; details: LeaveDetails; vacationBalance: number; vacationDays: number; token: string }
-export interface LeaveFilters { from: string; to: string; branchId?: string; employeeId?: string; managerId?: string; status?: LeaveStatus; kind?: LeaveKind; page: number; limit: number }
+export interface LeaveFilters { from: string; to: string; branchId?: string; employeeId?: string; managerId?: string; status?: LeaveStatus; kind?: LeaveKind; scope?: 'own' | 'assigned'; page: number; limit: number }
 export interface LeaveAuthorization {
   requestId: string; kind: LeaveKind; paid: boolean; useVacation: boolean; reason: string; authorizedTime: string | null;
   start: string; end: string;

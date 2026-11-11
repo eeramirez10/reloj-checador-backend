@@ -1,9 +1,11 @@
-import { ConfigurationError, ConflictError } from '../errors/app-error.js';
+import { AppError, ConfigurationError, ConflictError } from '../errors/app-error.js';
 import { addDays, dateAtLocalTime } from '../entities/local-date.js';
 import type { LeaveDay, LeaveFilters, LeaveInput, LeavePreview, LeaveProfileInput, LeaveRequest } from '../entities/leave.js';
 import type { LeaveRepository, LeaveSession } from '../repositories/leave-repository.js';
 import { dayContext } from './get-employee-attendance.js';
 import { requireActiveEmployee, saveEmployeeLeaveProfile } from './save-employee-leave-profile.js';
+import type { AuthPrincipal } from '../entities/auth.js';
+import { assertLeaveDecision } from '../entities/leave-access.js';
 
 async function preview(session: LeaveSession, input: LeaveInput, fingerprint: (value: string) => string): Promise<LeavePreview> {
   const { employee, profile, history } = await session.context(input.employeeId, input.from, input.to);
@@ -67,15 +69,21 @@ export class ManageLeave {
     });
   }
 
-  resolve(id: string, input: { action: 'approve' | 'reject' | 'cancel'; expectedVersion: number; actorEmployeeId: string; comments: string }) {
+  resolve(id: string, input: { action: 'approve' | 'reject' | 'cancel'; expectedVersion: number; comments: string }, account: AuthPrincipal) {
     return this.repository.transaction(async (session) => {
       const request = await session.find(id);
+      const current = await session.decisionAccount(account.id);
+      if (!current?.isActive || current.version !== account.version || current.role !== account.role || (current.employeeId ?? null) !== (account.employeeId ?? null)) {
+        throw new AppError('La cuenta cambió. Vuelve a iniciar sesión antes de resolver.', 'FORBIDDEN');
+      }
+      if (input.action !== 'cancel' && ['admin','hr'].includes(account.role)) assertLeaveDecision(account,request,input.action);
       if (request.version !== input.expectedVersion) throw new ConflictError('La solicitud cambió. Actualiza su detalle.');
       const cancellation = input.action === 'cancel';
       if (cancellation ? !['pending', 'approved'].includes(request.status) : request.status !== 'pending') throw new ConflictError('La solicitud ya fue resuelta.');
+      const actorEmployeeId = assertLeaveDecision(account,request,input.action);
       const allowedActors = cancellation ? [request.employeeId, request.managerId] : [request.managerId];
-      if (!allowedActors.includes(input.actorEmployeeId)) throw new ConfigurationError('La resolución debe registrarse a nombre del jefe responsable; el empleado también puede cancelar.');
-      const actor = (await session.context(input.actorEmployeeId, request.from, request.to)).employee;
+      if (!allowedActors.includes(actorEmployeeId)) throw new ConfigurationError('La resolución debe registrarse a nombre del jefe responsable; el empleado también puede cancelar.');
+      const actor = (await session.context(actorEmployeeId, request.from, request.to)).employee;
       requireActiveEmployee(actor);
       if (input.action !== 'approve' && !input.comments.trim()) throw new ConfigurationError('Escribe el motivo de rechazo o cancelación.');
       if (input.action === 'approve') await this.validateApproval(session, request);
@@ -83,8 +91,8 @@ export class ManageLeave {
       if (vacationDays && input.action === 'approve') await session.vacationMovement(request.employeeId, -vacationDays, 'consumption', 'Permiso aprobado a cuenta de vacaciones.', request.id);
       if (vacationDays && cancellation && request.status === 'approved') await session.vacationMovement(request.employeeId, vacationDays, 'return', input.comments, request.id);
       const status = input.action === 'approve' ? 'approved' : input.action === 'reject' ? 'rejected' : 'cancelled';
-      const updated = await session.resolve(id, status, input.actorEmployeeId);
-      await session.event(updated, status, input.comments, input.actorEmployeeId);
+      const updated = await session.resolve(id, status, actorEmployeeId);
+      await session.event(updated, status, input.comments, actorEmployeeId);
       if (status === 'approved' || request.status === 'approved') await session.recalculateAttendance();
       return updated;
     });

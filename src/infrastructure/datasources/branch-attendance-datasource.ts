@@ -6,6 +6,8 @@ import type { Database } from '../database/database.js';
 import { employeeSelectColumns, mapEmployeeRow, type EmployeeRow } from './employee-datasource.js';
 import { loadEmployeeAttendanceHistories } from './employee-attendance-datasource.js';
 import { assertAttendanceHistoryAccess } from '../security/attendance-history-access.js';
+import { companyFilterSql } from './company-filter.js';
+import type { CompanySelection } from '../../domain/entities/company.js';
 
 export class PrismaBranchAttendanceDatasource implements BranchAttendanceDatasource {
   constructor(private readonly database: Pick<Database, 'transaction'>) {}
@@ -24,17 +26,23 @@ export class PrismaBranchAttendanceDatasource implements BranchAttendanceDatasou
       const branch = (await client.query<BranchAttendanceSnapshot['branch']>(
         'SELECT id,name,time_zone AS "timeZone" FROM branches WHERE id=$1', [query.branchId])).rows[0];
       if (!branch) throw new NotFoundError('Sucursal no encontrada.');
+      let companyFilter: CompanySelection | undefined;
+      if (query.companyId === 'unassigned') companyFilter = { id: null,name: 'Sin empresa' };
+      else if (query.companyId) {
+        companyFilter = (await client.query<CompanySelection>('SELECT id,name FROM companies WHERE id=$1',[query.companyId])).rows[0];
+        if (!companyFilter) throw new NotFoundError('Empresa no encontrada.');
+      }
       const isActive = query.employeeStatus === 'active';
       const totalEmployees = (await client.query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM employees
-        WHERE branch_id=$1 AND is_active=$2 AND identification_status <> 'merged'`, [query.branchId, isActive])).rows[0].count;
+        WHERE branch_id=$1 AND is_active=$2 AND identification_status <> 'merged' AND ${companyFilterSql('company_id',3)}`, [query.branchId, isActive,query.companyId ?? null])).rows[0].count;
       const page = pagination ? Math.min(pagination.page, Math.max(1, Math.ceil(totalEmployees / pagination.limit))) : 1;
       const employees = (await client.query<EmployeeRow>(`SELECT ${employeeSelectColumns()} FROM employees
-        WHERE branch_id=$1 AND is_active=$2 AND identification_status <> 'merged'
-        ORDER BY name, employee_number NULLS LAST, id LIMIT $3::int OFFSET $4::int`,
-      [query.branchId, isActive, pagination?.limit ?? null, pagination ? (page - 1) * pagination.limit : 0])).rows.map(mapEmployeeRow);
+        WHERE branch_id=$1 AND is_active=$2 AND identification_status <> 'merged' AND ${companyFilterSql('company_id',3)}
+        ORDER BY name, employee_number NULLS LAST, id LIMIT $4::int OFFSET $5::int`,
+      [query.branchId, isActive,query.companyId ?? null, pagination?.limit ?? null, pagination ? (page - 1) * pagination.limit : 0])).rows.map(mapEmployeeRow);
       await assertAttendanceHistoryAccess(client, employees.map((employee) => employee.id), query);
       const histories = await loadEmployeeAttendanceHistories(client, employees.map((employee) => employee.id), query);
-      return { branch, employees, histories, page, totalEmployees };
+      return { branch, employees, histories, page, totalEmployees,...(companyFilter ? {companyFilter} : {}) };
     });
   }
 }

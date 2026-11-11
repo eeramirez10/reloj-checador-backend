@@ -3,6 +3,7 @@ import type { Employee } from '../entities/employee.js';
 import type { EmployeeAttendanceHistory } from './employee-attendance-repository.js';
 
 export interface BranchAttendanceSnapshot {
+  companyFilter?: BranchAttendanceCards['companyFilter'];
   branch: BranchAttendanceCards['branch']; employees: Employee[];
   histories: Map<string, EmployeeAttendanceHistory>; page: number; totalEmployees: number;
 }

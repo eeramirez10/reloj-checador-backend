@@ -13,6 +13,20 @@ function devices(listEnabled: () => Promise<Device[]>): DeviceRepository {
 }
 
 describe('sync scheduler recovery', () => {
+  it('does not schedule clock communication when automatic synchronization is disabled', async () => {
+    vi.useFakeTimers();
+    const list = vi.fn(async () => [device]);
+    const sync = vi.fn(async () => ({ id: 'manual-run' } as SyncRun));
+    const scheduler = new SyncScheduler(devices(list), { sync }, 60, { error: vi.fn() }, false);
+    try {
+      scheduler.start();
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(list).not.toHaveBeenCalled();
+      expect(sync).not.toHaveBeenCalled();
+      await scheduler.syncAll();
+      expect(sync).toHaveBeenCalledTimes(1);
+    } finally { await scheduler.stop(); vi.useRealTimers(); }
+  });
   it('recovers on the next cycle after listing devices fails', async () => {
     const list = vi.fn<() => Promise<Device[]>>().mockRejectedValueOnce(new Error('Database offline')).mockResolvedValue([]);
     const error = vi.fn();

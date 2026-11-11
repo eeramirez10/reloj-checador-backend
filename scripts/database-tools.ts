@@ -54,6 +54,6 @@ export function runPostgresTool(tool: 'pg_dump' | 'pg_restore', connection: stri
 
 export function deployMigrations(url: string): void {
   execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'deploy'], {
-    env: { ...process.env, DATABASE_URL: url }, stdio: 'inherit', timeout: 120_000,
+    env: { ...process.env, APP_ENV: 'test', DATABASE_URL: url }, stdio: 'inherit', timeout: 120_000,
   });
 }

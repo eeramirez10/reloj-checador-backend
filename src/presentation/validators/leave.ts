@@ -17,10 +17,11 @@ export const leaveProfileSchema = z.object({
 }).strict();
 export const leaveResolutionSchema = z.object({
   action: z.enum(['approve', 'reject', 'cancel']), expectedVersion: z.number().int().min(1),
-  actorEmployeeId: z.string().uuid(), comments: z.string().trim().max(2000).default(''),
+  comments: z.string().trim().max(2000).default(''),
 }).strict();
 export const leaveFiltersSchema = z.object({
   from: dateSchema, to: dateSchema, branchId: z.string().uuid().optional(), employeeId: z.string().uuid().optional(), managerId: z.string().uuid().optional(),
   status: z.enum(['pending','approved','rejected','cancelled']).optional(), kind: z.enum(['absence','late_arrival','early_exit']).optional(),
+  scope: z.enum(['own','assigned']).optional(),
   page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(25),
 }).strict().refine((value) => value.from <= value.to, 'El rango de fechas es inválido.');

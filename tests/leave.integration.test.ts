@@ -8,6 +8,8 @@ import type { LeaveInput, LeaveRequest } from '../src/domain/entities/leave.js';
 import { createHash } from 'node:crypto';
 import { ManageLeave } from '../src/domain/use-cases/manage-leave.js';
 import { PrismaLeaveRepository } from '../src/infrastructure/repositories/leave-repository.js';
+import { buildApp as buildApplication } from '../src/main.js';
+import type { AuthPrincipal } from '../src/domain/entities/auth.js';
 
 const connection = process.env.INTEGRATION_DATABASE_URL;
 const integration = connection ? describe : describe.skip;
@@ -17,8 +19,10 @@ integration('employee leave requests, vacation accounting and attendance', () =>
   let admin: Database; let database: Database; let services: Awaited<ReturnType<typeof buildApp>>;
   let branchId: string; let bossId: string; let employeeId: string; let deviceId: string;
   let absence: LeaveRequest;
+  let bossServices: Awaited<ReturnType<typeof buildApplication>>;
+  let bossPrincipal: AuthPrincipal;
   async function call(method: 'GET' | 'POST' | 'PUT', url: string, payload?: object, expected = 200) {
-    const response = await services.app.inject({ method, url, payload });
+    const response = await (url.endsWith('/resolve') ? bossServices : services).app.inject({ method, url, payload });
     expect(response.statusCode, response.body).toBe(expected);
     return response.body ? response.json() : undefined;
   }
@@ -36,7 +40,7 @@ integration('employee leave requests, vacation accounting and attendance', () =>
     return call('POST', '/leave-requests', { input: value, previewToken: preview.token, sourceKey: randomUUID() }, 201) as Promise<LeaveRequest>;
   }
   function resolve(request: LeaveRequest, action = 'approve', comments = '') {
-    return call('POST', `/leave-requests/${request.id}/resolve`, { action, expectedVersion: request.version, actorEmployeeId: bossId, comments });
+    return call('POST', `/leave-requests/${request.id}/resolve`, { action, expectedVersion: request.version, comments });
   }
   const card = (from: string, to = from) => call('GET', `/employees/${employeeId}/attendance?from=${from}&to=${to}`);
 
@@ -67,8 +71,11 @@ integration('employee leave requests, vacation accounting and attendance', () =>
     await call('POST', `/devices/${deviceId}/sync-attendance`);
     await configure(bossId, 0, null, '+525555555551');
     await configure(employeeId, 10, bossId, '+525555555552');
+    bossPrincipal = { id: randomUUID(),username: 'test-boss',name: 'Jefa',role: 'employee',employeeId: bossId,branchIds: [],isActive: true,mustChangePassword: false,version: 1,sessionHash: 'test',csrfToken: 'test' };
+    await database.query("INSERT INTO auth_accounts(id,username,name,password_hash,role,employee_id,must_change_password) VALUES($1,'test-boss','Jefa','test-only','employee',$2,FALSE)",[bossPrincipal.id,bossId]);
+    bossServices = await buildApplication({ database,authentication: { testPrincipal: bossPrincipal } });
   }, 30000);
-  afterAll(async () => { await services?.app.close(); await database?.close(); if (admin) { await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.close(); } });
+  afterAll(async () => { await bossServices?.app.close(); await services?.app.close(); await database?.close(); if (admin) { await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.close(); } });
 
   it('configures a direct manager, validates hierarchy, phone uniqueness and stale vacation edits', async () => {
     const current = await profile();
@@ -101,8 +108,8 @@ integration('employee leave requests, vacation accounting and attendance', () =>
 
   it('approves atomically once, accounts for vacation days and includes authorized days without punches in all attendance views', async () => {
     const sources = (await database.query('SELECT id,event_key,raw_data,occurred_at FROM attendance_logs ORDER BY id')).rows;
-    const payload = { action: 'approve', expectedVersion: absence.version, actorEmployeeId: bossId, comments: 'Autorizado' };
-    const responses = await Promise.all([services.app.inject({ method: 'POST', url: `/leave-requests/${absence.id}/resolve`, payload }), services.app.inject({ method: 'POST', url: `/leave-requests/${absence.id}/resolve`, payload })]);
+    const payload = { action: 'approve', expectedVersion: absence.version, comments: 'Autorizado' };
+    const responses = await Promise.all([bossServices.app.inject({ method: 'POST', url: `/leave-requests/${absence.id}/resolve`, payload }), bossServices.app.inject({ method: 'POST', url: `/leave-requests/${absence.id}/resolve`, payload })]);
     expect(responses.map((response) => response.statusCode).sort()).toEqual([200,409]);
     absence = responses.find((response) => response.statusCode === 200)!.json();
     expect((await profile()).vacationBalance).toBe(8);
@@ -122,7 +129,7 @@ integration('employee leave requests, vacation accounting and attendance', () =>
     expect(cancelled.status).toBe('cancelled');
     expect((await profile()).vacationBalance).toBe(10);
     expect((await card('2026-10-16')).days[0].status).toBe('no_records');
-    await call('POST', `/leave-requests/${absence.id}/resolve`, { action: 'cancel', expectedVersion: cancelled.version, actorEmployeeId: employeeId, comments: 'Otra vez' }, 409);
+    await call('POST', `/leave-requests/${absence.id}/resolve`, { action: 'cancel', expectedVersion: cancelled.version, comments: 'Otra vez' }, 409);
     expect((await profile()).movements.map((movement: any) => movement.days).sort((a: number, b: number) => a-b)).toEqual([-2,2,10]);
   });
 
@@ -159,7 +166,7 @@ integration('employee leave requests, vacation accounting and attendance', () =>
     const second = await create(input('2026-10-23', undefined, { useVacation: true }));
     await call('POST', `/leave-requests/${first.id}/resolve`, { action: 'approve', expectedVersion: first.version, actorEmployeeId: employeeId }, 400);
     await resolve(first);
-    await call('POST', `/leave-requests/${second.id}/resolve`, { action: 'approve', expectedVersion: second.version, actorEmployeeId: bossId }, 409);
+    await call('POST', `/leave-requests/${second.id}/resolve`, { action: 'approve', expectedVersion: second.version }, 409);
     await resolve(second, 'reject', 'Sin saldo disponible');
     expect((await profile()).vacationBalance).toBe(0);
   });
@@ -188,7 +195,7 @@ integration('employee leave requests, vacation accounting and attendance', () =>
     const before = await profile();
     const service = new ManageLeave(new PrismaLeaveRepository(database, async () => { throw new Error('Simulated recalculation failure'); }),
       (value) => createHash('sha256').update(value).digest('hex'));
-    await expect(service.resolve(request.id, { action: 'approve', expectedVersion: request.version, actorEmployeeId: bossId, comments: '' })).rejects.toThrow('Simulated recalculation failure');
+    await expect(service.resolve(request.id, { action: 'approve', expectedVersion: request.version, comments: '' },bossPrincipal)).rejects.toThrow('Simulated recalculation failure');
     expect((await call('GET', `/leave-requests/${request.id}`)).request.status).toBe('pending');
     expect(await profile()).toEqual(before);
     expect((await call('GET', `/leave-requests/${request.id}`)).events).toHaveLength(1);
@@ -202,7 +209,7 @@ integration('employee leave requests, vacation accounting and attendance', () =>
       workHours: { workDays: [1,2,3,4,5,6], entryTime: '08:30', exitTime: '17:30' },
       meal: { mode: 'disabled', startTime: '13:00', endTime: '13:00', durationMinutes: 60 }, recognitionMarginMinutes: 30,
       policy: configuration.policy.settings }, 201);
-    await call('POST', `/leave-requests/${request.id}/resolve`, { action: 'approve', expectedVersion: request.version, actorEmployeeId: bossId }, 409);
+    await call('POST', `/leave-requests/${request.id}/resolve`, { action: 'approve', expectedVersion: request.version }, 409);
     expect((await call('GET', `/leave-requests/${request.id}`)).request.details.days).toEqual(request.details.days);
     const filtered = await call('GET', `/leave-requests?from=2026-11-01&to=2026-11-30&managerId=${bossId}&status=pending&limit=1`);
     expect(filtered.total).toBe(1); expect(filtered.requests[0].id).toBe(request.id);

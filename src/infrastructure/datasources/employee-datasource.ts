@@ -5,6 +5,9 @@ import { getUpdatedProfileName } from '../../domain/entities/personal-profile.js
 import { EmployeeLifecycle } from './employee-lifecycle.js';
 import type { EmployeeDatasource } from '../../domain/datasources/persistence.js';
 import { branchScopeSql } from '../security/access-context.js';
+import { validateCompanyAssignment } from './company-assignment.js';
+import type { EmployeeFilters } from '../../domain/dtos/filters.js';
+import { companyFilterSql } from './company-filter.js';
 
 export type EmployeeRow = {
   id: string;
@@ -26,6 +29,8 @@ export type EmployeeRow = {
   updated_at: Date;
   branch_id: string | null;
   branch_name: string | null;
+  company_id: string | null;
+  company_name: string | null;
   first_name: string | null;
   last_name: string | null;
   identification_status: Employee['identificationStatus'];
@@ -43,6 +48,7 @@ export function employeeSelectColumns() { return `id, employee_number, normalize
   management_code, section_code, company_code, branch_code, schedule_type_code, hire_date::text AS hire_date,
   termination_date::text AS termination_date, ${statusExpression} AS employment_status, created_at, updated_at, branch_id,
   (SELECT name FROM branches WHERE id = employees.branch_id) AS branch_name,
+  company_id,(SELECT name FROM companies WHERE id=employees.company_id) AS company_name,
   identification_status, merged_into_id, is_active, original_name, name_split_method,
   (SELECT jsonb_build_object('versionId', v.id, 'effectiveFrom', v.effective_from::text, 'workHours', v.work_hours,
     'meal', v.meal, 'recognitionMarginMinutes', v.recognition_margin_minutes,
@@ -82,6 +88,8 @@ export const mapEmployeeRow = (row: EmployeeRow): Employee => ({
   updatedAt: row.updated_at,
   branchId: row.branch_id ?? undefined,
   branchName: row.branch_name ?? undefined,
+  companyId: row.company_id ?? null,
+  companyName: row.company_name ?? null,
   identificationStatus: row.identification_status,
   mergedIntoId: row.merged_into_id ?? undefined,
   clockRecords: row.clock_records ?? [],
@@ -102,6 +110,11 @@ export class PrismaEmployeeDatasource implements EmployeeDatasource {
   async update(id: string, fields: Record<string, string | null>, isActive?: boolean): Promise<boolean> {
     const statusChanged = isActive === undefined ? false : await new EmployeeLifecycle(this.database).setActive(id, isActive);
     const changes = { ...fields };
+    if (changes.companyId !== undefined) {
+      const current = (await this.database.query<{ company_id: string | null }>('SELECT company_id FROM employees WHERE id=$1 FOR UPDATE',[id])).rows[0];
+      if (!current) return false;
+      await validateCompanyAssignment(this.database,changes.companyId,current.company_id);
+    }
     if (changes.employeeNumber !== undefined) changes.normalizedEmployeeNumber = changes.employeeNumber ? normalizeEmployeeNumber(changes.employeeNumber) : null;
     if (changes.firstName !== undefined || changes.lastName !== undefined) {
       const current = (await this.database.query<{ firstName: string | null; lastName: string | null }>(
@@ -118,6 +131,7 @@ export class PrismaEmployeeDatasource implements EmployeeDatasource {
     const columns: Record<string, string> = {
       firstName: 'first_name', lastName: 'last_name',
       normalizedEmployeeNumber: 'normalized_employee_number',
+      companyId: 'company_id',
       nameSplitMethod: 'name_split_method',
       name: 'name', employeeNumber: 'employee_number', position: 'position', rfc: 'rfc', imss: 'imss',
       managementCode: 'management_code', sectionCode: 'section_code', companyCode: 'company_code',
@@ -157,13 +171,7 @@ export class PrismaEmployeeDatasource implements EmployeeDatasource {
     if (stored && stored.identification_status !== 'merged') await new EmployeeLifecycle(this.database).recordInitial(stored.id);
   }
 
-  async list(filters: {
-    search?: string;
-    branchCode?: string;
-    employmentStatus?: EmploymentStatus;
-    identificationStatus?: 'confirmed' | 'pending';
-    limit: number;
-  }): Promise<Employee[]> {
+  async list(filters: EmployeeFilters): Promise<Employee[]> {
     const result = await this.database.query<EmployeeRow>(
       `SELECT ${employeeSelectColumns()} FROM employees
         WHERE (${branchScopeSql('branch_id')}) AND ($1::text IS NULL OR employee_number ILIKE '%' || $1 || '%'
@@ -174,8 +182,10 @@ export class PrismaEmployeeDatasource implements EmployeeDatasource {
           AND ($3::text IS NULL OR (${statusExpression}) = $3)
           AND identification_status <> 'merged'
           AND ($5::text IS NULL OR identification_status = $5)
+          AND ${companyFilterSql('company_id',6)}
+          AND ($7::text IS NULL OR CASE WHEN $7='unassigned' THEN branch_id IS NULL ELSE branch_id=$7::uuid END)
        ORDER BY name, employee_number LIMIT $4`,
-      [filters.search?.trim() || null, filters.branchCode ?? null, filters.employmentStatus ?? null, filters.limit, filters.identificationStatus ?? null],
+      [filters.search?.trim() || null, filters.branchCode ?? null, filters.employmentStatus ?? null, filters.limit, filters.identificationStatus ?? null,filters.companyId ?? null,filters.branchId ?? null],
     );
     return result.rows.map(mapEmployeeRow);
   }

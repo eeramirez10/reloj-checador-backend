@@ -31,6 +31,10 @@ import type { ResolveWhatsAppEmployee } from '../domain/use-cases/resolve-whatsa
 import type { ManageAuth } from '../domain/use-cases/manage-auth.js';
 import type { AccessControl } from '../domain/datasources/access-control.js';
 import type { AuthPrincipal } from '../domain/entities/auth.js';
+import type { EmployeePortalRepository } from '../domain/repositories/employee-portal-repository.js';
+import type { EmployeeContactRepository } from '../domain/repositories/employee-contact-repository.js';
+import type { IssueEmployeeAccess } from '../domain/use-cases/issue-employee-access.js';
+import type { CompanyRepository } from '../domain/repositories/company-repository.js';
 
 export interface WhatsAppServices {
   scope: WhatsAppScope; security: WhatsAppWebhookSecurity; receive: ReceiveWhatsAppMessage; send: SendWhatsAppMessage;
@@ -39,6 +43,10 @@ export interface WhatsAppServices {
 
 export interface ApplicationServices {
   auth: ManageAuth;
+  companies: CompanyRepository;
+  portal: EmployeePortalRepository;
+  contacts: EmployeeContactRepository;
+  employeeAccess: IssueEmployeeAccess;
   access: AccessControl;
   authentication: { origins: string[]; secureCookie: boolean; sessionHours: number; testPrincipal?: AuthPrincipal };
   whatsapp?: WhatsAppServices;

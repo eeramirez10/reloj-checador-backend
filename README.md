@@ -14,6 +14,10 @@ Requiere Node.js `^20.19`, `^22.12` o `>=24` y PostgreSQL 16. Verificado con Nod
 
 La sincronización de fotos de usuario requiere un puente local en Windows con el SDK de ZKTeco; configure `ZK_PHOTO_BRIDGE_URL` y siga el contrato de `docs/sdk-bridge.md`. Sin ese servicio, las listas de usuarios siguen disponibles y las fotos aparecen cuando se sincronizan.
 
+## Empresas
+
+La clasificación de empleados por empresa, sus filtros y exportaciones están documentados en [docs/companies.md](docs/companies.md). Cada empleado tiene una empresa actual opcional, independiente de su sucursal.
+
 ## Arquitectura
 
 ```text
@@ -174,7 +178,7 @@ La página **Asistencia → Permisos** registra solicitudes para faltar, llegar 
 - `POST /leave-requests`: `{ input, previewToken, sourceKey }`, donde `sourceKey` es un UUID estable por envío. Crea una solicitud pendiente y su evento en una sola transacción. Reintentar con la misma clave y contenido devuelve la misma solicitud. Un cambio de horario, jefe o saldo posterior a la revisión devuelve 409.
 - `GET /leave-requests?from=YYYY-MM-DD&to=YYYY-MM-DD`: lista paginada de solicitudes que intersectan el rango, con filtros opcionales `branchId`, `employeeId`, `managerId`, `kind` y `status`; `page` inicia en 1 y `limit` en 25, máximo 100.
 - `GET /leave-requests/:id`: solicitud, instantánea original de días/jefe e historial de eventos.
-- `POST /leave-requests/:id/resolve`: `{ action: approve | reject | cancel, expectedVersion, actorEmployeeId, comments }`. Aprobación/rechazo se registran desde la página administrativa a nombre del jefe responsable. El empleado o jefe también pueden cancelar. Rechazar/cancelar requiere motivo. La identidad capturada documenta la resolución administrativa; no representa autenticación personal del jefe por WhatsApp.
+- `POST /leave-requests/:id/resolve`: `{ action: approve | reject | cancel, expectedVersion, comments }`. La identidad se obtiene de la sesión. Solo una cuenta de empleado/encargado vinculada al jefe responsable puede aprobar/rechazar, incluso entre sucursales; RH y administrador tienen esas acciones bloqueadas. El solicitante o jefe pueden cancelar con motivo. La cuenta y su vínculo se revalidan dentro de la transacción.
 
 El saldo es manual: no se generan días por antigüedad ni vencimientos. Solo se descuentan los días laborables al aprobar, verificando nuevamente el saldo y el calendario. Si cambia la jornada pendiente, se requiere cancelar y registrar una solicitud nueva. Cancelar un aprobado devuelve exactamente los días consumidos. Solicitudes con intervalos superpuestos pendientes/aprobados se rechazan. Los movimientos de vacaciones, decisión, evento y recálculo se guardan atómicamente: si falla cualquiera, se revierte toda la resolución. Los bloqueos usan el mismo orden que la evaluación de asistencia para coordinar aprobaciones, cambios de saldo y sincronizaciones.
 
@@ -334,11 +338,17 @@ El estado original del reloj se muestra como dato de verificación en **Checadas
 
 ## Acceso al panel
 
-El panel requiere usuario y contraseña. Las cuentas son independientes de empleados y tienen rol administrador, RH o encargado; RH y encargados reciben una o varias sucursales explícitas. El backend restringe listas, recursos por ID, fotos, operaciones y exportaciones. El primer acceso con una contraseña temporal exige cambiarla. La instalación, recuperación del administrador, permisos y configuración de cookies/orígenes están en [docs/panel-auth.md](docs/panel-auth.md).
+El panel requiere usuario y contraseña. Las cuentas se almacenan separadas del expediente y pueden vincularse a un empleado mediante `employee_id`. Los roles son administrador, RH, encargado y empleado; RH y encargados reciben sucursales explícitas, mientras el empleado tiene acceso personal. El backend restringe listas, recursos por ID, fotos, operaciones y exportaciones. El primer acceso con una contraseña temporal exige cambiarla. La instalación y recuperación del administrador están en [docs/panel-auth.md](docs/panel-auth.md).
+
+El portal personal, los nuevos campos de contacto, el catálogo de tipos de sangre, la generación de accesos por correo y la configuración de Microsoft 365 para `rhmex@tuvansa.com.mx` están documentados en [docs/employee-portal-microsoft365.md](docs/employee-portal-microsoft365.md).
 
 ## Base de datos en Neon
 
 La aplicación admite PostgreSQL en Neon mediante conexión directa y SSL con verificación de certificado. La sincronización y el recálculo guardan resultados por lotes para reducir viajes de red, conservando identidades, checadas originales e historial. La configuración, migración verificada, activación y respaldos se describen en [docs/neon-database.md](docs/neon-database.md).
+
+## Desarrollo separado de producción
+
+La Mac puede utilizar una rama de desarrollo de Neon con `APP_ENV=development`, `SYNC_ENABLED=false` y WhatsApp desactivado. `npm run dev:configure` valida y selecciona `DEVELOPMENT_DATABASE_URL`, conservando una referencia a producción para impedir conexiones accidentales desde el backend y Prisma Migrate. Windows conserva `main`, su `.env` y la sincronización automática. Consulta [docs/development-workflow.md](docs/development-workflow.md).
 
 ## Verificación
 

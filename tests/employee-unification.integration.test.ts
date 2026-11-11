@@ -101,7 +101,7 @@ integration('lossless employee unification', () => {
     const snapshot = (await database.query("SELECT record - 'binding_status' AS record FROM employee_unification_snapshots WHERE source_type='device_user' AND source_id=$1", [pendingRecordId])).rows[0].record;
     expect(snapshot).toEqual(originalRecord);
     const preserved = (await database.query("SELECT to_jsonb(e) - 'identification_status' - 'merged_into_id' - 'is_active' - 'original_name' - 'name_split_method' AS record FROM employees e WHERE id=$1", [employeeId])).rows[0].record;
-    expect(preserved).toEqual(originalEmployee);
+    expect(preserved).toEqual({ ...originalEmployee,company_id: null });
     expect((await database.query('SELECT COUNT(*)::int AS count FROM schedule_assignments WHERE employee_id=$1', [pendingRecordId])).rows[0].count).toBe(1);
     expect((await database.query('SELECT COUNT(*)::int AS count FROM schedule_assignments WHERE device_user_id=$1', [pendingRecordId])).rows[0].count).toBe(1);
     expect((await database.query('SELECT employee_id,device_user_id FROM attendance_evaluations WHERE id=ANY($1::uuid[])', [evaluationIds])).rows.every((row) => row.employee_id === pendingRecordId && row.device_user_id === null)).toBe(true);

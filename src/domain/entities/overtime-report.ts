@@ -1,6 +1,7 @@
 import type { BranchAttendanceFilters, BranchAttendanceQuery } from './branch-attendance.js';
 import type { EmployeeAttendanceCard, EmployeeAttendanceDay } from './employee-attendance.js';
 import type { OvertimeDay } from './overtime.js';
+import type { CompanySelection } from './company.js';
 
 export interface OvertimeTotals {
   grossSeconds: number; dailyRestSeconds: number; additionalRestSeconds: number; netSeconds: number;
@@ -12,6 +13,7 @@ export interface EmployeeOvertimeReport {
   totals: OvertimeTotals;
 }
 export interface OvertimeReportData {
+  companyFilter?: CompanySelection;
   branch: { id: string; name: string; timeZone: string };
   period: { from: string; to: string };
   employeeStatus: BranchAttendanceFilters['employeeStatus'];

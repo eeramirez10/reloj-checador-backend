@@ -4,7 +4,7 @@ import { buildEmployeeAttendanceCard } from './get-employee-attendance.js';
 
 function buildReport(snapshot: BranchAttendanceSnapshot, filters: BranchAttendanceFilters, now: Date): BranchAttendanceExport {
   const period = { from: filters.from, to: filters.to };
-  return { branch: snapshot.branch, period, employeeStatus: filters.employeeStatus, totalEmployees: snapshot.totalEmployees,
+  return { branch: snapshot.branch, period, employeeStatus: filters.employeeStatus, totalEmployees: snapshot.totalEmployees,...(snapshot.companyFilter ? {companyFilter: snapshot.companyFilter} : {}),
     cards: snapshot.employees.map((employee) => buildEmployeeAttendanceCard(employee, snapshot.histories.get(employee.id)!, period, now)) };
 }
 

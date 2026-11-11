@@ -1,6 +1,6 @@
 # Acceso al panel
 
-Las cuentas del panel son independientes de empleados y usuarios de los relojes. Se guardan en la misma base PostgreSQL en `auth_accounts`, `auth_account_branches`, `auth_sessions` y `auth_audit_events`.
+Las cuentas del panel se guardan separadas del expediente y de los usuarios de relojes, en la misma base PostgreSQL: `auth_accounts`, `auth_account_branches`, `auth_sessions` y `auth_audit_events`. `auth_accounts.employee_id` permite vincular una cuenta con un único empleado. El vínculo es obligatorio para las cuentas de rol empleado y para resolver como jefe. La creación de accesos por correo está en [employee-portal-microsoft365.md](employee-portal-microsoft365.md).
 
 ## Instalación y administrador inicial
 
@@ -23,21 +23,23 @@ Solo restablece cuentas administradoras existentes. Genera otra contraseña temp
 
 ## Roles y sucursales
 
-| Acción | Administrador | RH | Encargado |
-| --- | --- | --- | --- |
-| Consultar empleados, asistencia, permisos y reportes/PDF | Todas | Asignadas | Asignadas |
-| Resolver permisos | Sí | Asignadas | Asignadas |
-| Gestionar empleados, horarios, vacaciones y adscripciones | Sí | Asignadas | No |
-| Importar checadas, sincronizar usuarios, marcas y fotos | Sí | Asignadas | No |
-| Administrar cuentas, crear/editar sucursales y dispositivos | Sí | No | No |
-| Ajustar hora o rol de administrador del reloj | Sí | No | No |
-| Recálculo global y documentación API | Sí | No | No |
+| Acción | Administrador | RH | Encargado | Empleado |
+| --- | --- | --- | --- | --- |
+| Consultar empleados, asistencia y reportes/PDF | Todas | Asignadas | Asignadas | Solo asistencia propia |
+| Aprobar/rechazar permisos | No | No | Solo si es el jefe vinculado | Solo si es el jefe vinculado |
+| Consultar permisos asignados como jefe entre sucursales | Según alcance | Según alcance | Sí | Sí |
+| Gestionar empleados, horarios, vacaciones y adscripciones | Sí | Asignadas | No | No |
+| Importar checadas, sincronizar usuarios, marcas y fotos | Sí | Asignadas | No | No |
+| Administrar cuentas, crear/editar sucursales y dispositivos | Sí | No | No | No |
+| Generar acceso de empleado desde su expediente | Sí | Asignadas | No | No |
+| Ajustar hora o rol de administrador del reloj | Sí | No | No | No |
+| Recálculo global y documentación API | Sí | No | No | No |
 
 RH y encargados deben tener al menos una sucursal explícita; una lista vacía nunca concede acceso global. La ubicación laboral de la persona no determina sus permisos. Un encargado o una cuenta de RH pueden recibir varias sucursales. Las cuentas administradoras incluyen todas, también las creadas después.
 
 Los filtros de lectura se aplican en SQL antes de límites, paginación y totales. Se validan además los IDs de recursos y las referencias de cuerpos/consultas, incluyendo origen y destino de reasignaciones. Los relojes y perfiles históricos de otra sucursal no se exponen en el catálogo. Un periodo de asistencia que abarca una sucursal no autorizada se rechaza; hay que consultar un periodo permitido o asignar ambas sucursales. La edición y el historial completo de un empleado trasladado requieren acceso a sus sucursales históricas.
 
-La identidad del operador proviene de su sesión. Los eventos de permisos y movimientos de vacaciones guardan `actor_account_id` dentro de la misma transacción; `actor_employee_id` conserva el responsable de negocio en cuyo nombre se registra la resolución y sigue validándose. El detalle muestra la cuenta que ejecutó la acción. La auditoría general registra las operaciones HTTP exitosas sin copiar cuerpos, contraseñas, imágenes ni secretos.
+La identidad del operador proviene de su sesión y de su empleado vinculado. La resolución revalida rol, estado, vínculo y versión de la cuenta bajo bloqueo transaccional. Los eventos de permisos y movimientos de vacaciones guardan `actor_account_id`; `actor_employee_id` se deriva del vínculo y no se acepta del navegador. El detalle muestra la cuenta que ejecutó la acción. La auditoría general registra operaciones sin copiar cuerpos, contraseñas, imágenes ni secretos.
 
 ## Sesiones y configuración
 

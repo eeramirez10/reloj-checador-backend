@@ -47,11 +47,11 @@ export class EmployeeController {
 
   update = async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = idParams.parse(request.params);
-    const { socialSecurityNumber, isActive, scheduling, leaveProfile, ...remaining } = employeeEditSchema.parse(request.body);
+    const { socialSecurityNumber, isActive, scheduling, leaveProfile, contact, ...remaining } = employeeEditSchema.parse(request.body);
     const fields = Object.fromEntries(Object.entries({ ...remaining, ...(socialSecurityNumber !== undefined ? { imss: socialSecurityNumber } : {}) })
       .filter(([, value]) => value !== undefined)) as Record<string, string | null>;
-    if (!await this.services.updateEmployee.execute(id, fields, isActive, scheduling, leaveProfile)) throw new NotFoundError('Empleado no encontrado o sin cambios.');
-    await this.services.evaluation.recalculate();
+    if (!await this.services.updateEmployee.execute(id, fields, isActive, scheduling, leaveProfile, contact)) throw new NotFoundError('Empleado no encontrado o sin cambios.');
+    if (Object.keys(fields).some(key => key !== 'companyId') || isActive !== undefined || scheduling || leaveProfile) await this.services.evaluation.recalculate();
     return reply.code(204).send();
   };
 

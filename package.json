@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:configure": "tsx scripts/configure-development.ts",
     "start": "tsx src/server.ts",
     "postinstall": "node scripts/patch-zklib.mjs && prisma generate",
     "typecheck": "tsc --noEmit",

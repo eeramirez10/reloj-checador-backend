@@ -1,10 +1,12 @@
 import type { Queryable } from '../database/database.js';
 import type { AttendancePeriod } from '../../domain/entities/employee-attendance.js';
 import { AppError } from '../../domain/errors/app-error.js';
-import { branchScopeSql, scopedBranchIds } from './access-context.js';
+import { accessContext, branchScopeSql, scopedBranchIds } from './access-context.js';
 
 export async function assertAttendanceHistoryAccess(client: Queryable, ids: string[], period: AttendancePeriod) {
   if (!scopedBranchIds() || !ids.length) return;
+  const principal = accessContext.current();
+  if (principal?.employeeId && ids.every(id => id === principal.employeeId)) return;
   const outside = (await client.query(`WITH timeline AS (
     SELECT branch_id,effective_from,LEAD(effective_from) OVER(PARTITION BY employee_id ORDER BY effective_from) AS until_date
     FROM branch_assignments WHERE employee_id=ANY($1::uuid[]))

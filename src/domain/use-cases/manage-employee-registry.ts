@@ -38,6 +38,7 @@ export class EmployeeRegistry {
       const target = await session.lockEmployee(input.targetEmployeeId);
       if (target.identificationStatus !== 'confirmed') throw new ConfigurationError('Selecciona un empleado ya identificado.');
       if (source.branchId && target.branchId && source.branchId !== target.branchId) throw new ConfigurationError('El registro y el empleado deben pertenecer a la misma sucursal.');
+      if (source.companyId && target.companyId && source.companyId !== target.companyId) throw new ConfigurationError('Las fichas pertenecen a empresas distintas. Revisa su empresa antes de asociarlas.');
       const sourceClock = (await session.listClocks(id))[0];
       const currentClock = await session.currentClock(target.id);
       if (sourceClock && (!currentClock || input.useAsAssignedClock) && (target.branchId ?? source.branchId) !== sourceClock.branchId) {

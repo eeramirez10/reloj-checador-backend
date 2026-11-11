@@ -9,7 +9,7 @@ export class ManageAuth {
   async login(username: string, password: string) {
     const account = await this.repository.credentials(username.toLowerCase());
     const valid = await this.passwords.verify(account?.passwordHash ?? '', password);
-    if (!account?.isActive || !valid) {
+    if (!account?.isActive || !valid || (account.mustChangePassword && account.temporaryPasswordExpiresAt && new Date(account.temporaryPasswordExpiresAt).getTime() <= Date.now())) {
       await this.repository.audit(null, 'login_failed', account?.id, { username: username.toLowerCase() });
       throw new AppError('Usuario o contraseña incorrectos.', 'UNAUTHORIZED');
     }
@@ -19,9 +19,10 @@ export class ManageAuth {
   }
 
   async save(actorId: string | null, input: AccountInput, password?: string, id?: string, expectedVersion?: number) {
-    if (input.role !== 'admin' && !input.branchIds.length) throw new ConfigurationError('Asigna al menos una sucursal.');
+    if (!['admin','employee'].includes(input.role) && !input.branchIds.length) throw new ConfigurationError('Asigna al menos una sucursal.');
+    if (input.role === 'employee' && !input.employeeId) throw new ConfigurationError('Vincula la cuenta con un empleado.');
     if (!id && !password) throw new ConfigurationError('Indica una contraseña inicial.');
-    return this.repository.save(actorId, { ...input, username: input.username.toLowerCase(), branchIds: input.role === 'admin' ? [] : [...new Set(input.branchIds)] },
+    return this.repository.save(actorId, { ...input, username: input.username.toLowerCase(), branchIds: ['admin','employee'].includes(input.role) ? [] : [...new Set(input.branchIds)] },
       password ? await this.passwords.hash(password) : undefined, id, expectedVersion);
   }
 

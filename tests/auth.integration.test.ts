@@ -134,7 +134,11 @@ integration('authenticated panel and branch isolation', () => {
     expect(result.total).toBe(1); expect(result.requests[0].id).toBe(requests[0].id);
     await call(manager,'GET',`/leave-requests/${requests[1].id}`,undefined,403);
     await call(manager,'POST',`/leave-requests/${requests[0].id}/resolve`,{action:'approve',expectedVersion:1,actorEmployeeId:employees[2]},400);
-    await call(manager,'POST',`/leave-requests/${requests[0].id}/resolve`,{action:'approve',expectedVersion:1,actorEmployeeId:employees[1]});
+    await call(manager,'POST',`/leave-requests/${requests[0].id}/resolve`,{action:'approve',expectedVersion:1},403);
+    await call(root,'POST',`/leave-requests/${requests[0].id}/resolve`,{action:'approve',expectedVersion:1},403);
+    await call(hr,'POST',`/leave-requests/${requests[0].id}/resolve`,{action:'reject',expectedVersion:1,comments:'Forbidden'},403);
+    await database.query('UPDATE auth_accounts SET employee_id=$2 WHERE id=$1',[manager.id,employees[1]]);
+    await call(manager,'POST',`/leave-requests/${requests[0].id}/resolve`,{action:'approve',expectedVersion:1});
     const event = (await database.query("SELECT actor_account_id FROM leave_request_events WHERE request_id=$1 AND kind='approved'",[requests[0].id])).rows[0];
     const movement = (await database.query("SELECT actor_account_id FROM vacation_movements WHERE request_id=$1 AND kind='consumption'",[requests[0].id])).rows[0];
     expect(event.actor_account_id).toBe(manager.id); expect(movement.actor_account_id).toBe(manager.id);

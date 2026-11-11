@@ -7,6 +7,7 @@ import { PrismaEmployeeDatasource } from './employee-datasource.js';
 import { EmployeeLifecycle } from './employee-lifecycle.js';
 import { PrismaEmployeeSchedulingDatasource, scheduleVersionColumns } from './employee-scheduling-datasource.js';
 import { validateEmployeeScheduling } from '../../domain/entities/employee-scheduling.js';
+import { validateCompanyAssignment } from './company-assignment.js';
 
 const clockFields = 'u.id, u.employee_id AS "employeeId", u.device_id AS "deviceId", d.branch_id AS "branchId", u.binding_status AS "bindingStatus"';
 
@@ -19,9 +20,11 @@ export class PrismaEmployeeRegistrySession implements EmployeeRegistrySession {
 
   async create(input: EmployeeCreation, name: string, hireDate: string): Promise<string> {
     const id = randomUUID();
+    await validateCompanyAssignment(this.database,input.companyId ?? null);
     await this.database.prisma.employees.create({ data: {
       id, name, first_name: input.firstName, last_name: input.lastName, rfc: input.rfc, imss: input.socialSecurityNumber,
       branch_id: input.branchId, position: input.position, hire_date: new Date(`${hireDate}T00:00:00Z`), original_name: name, name_split_method: 'manual',
+      company_id: input.companyId,
     } });
     await this.database.prisma.branch_assignments.create({ data: {
       id: randomUUID(), employee_id: id, branch_id: input.branchId, effective_from: new Date('1900-01-01T00:00:00Z'),
@@ -37,7 +40,7 @@ export class PrismaEmployeeRegistrySession implements EmployeeRegistrySession {
   }
 
   async lockEmployee(id: string): Promise<RegistryEmployee> {
-    const employee = (await this.database.query<RegistryEmployee>('SELECT id, branch_id AS "branchId", identification_status AS "identificationStatus", first_name AS "firstName" FROM employees WHERE id = $1 FOR UPDATE', [id])).rows[0];
+    const employee = (await this.database.query<RegistryEmployee>('SELECT id, branch_id AS "branchId", company_id AS "companyId", identification_status AS "identificationStatus", first_name AS "firstName" FROM employees WHERE id = $1 FOR UPDATE', [id])).rows[0];
     if (!employee) throw new ConfigurationError('Empleado no encontrado.');
     return employee;
   }
@@ -73,7 +76,7 @@ export class PrismaEmployeeRegistrySession implements EmployeeRegistrySession {
         'scheduleVersions', (SELECT jsonb_agg(to_jsonb(v)) FROM employee_schedule_versions v WHERE v.employee_id = s.id))
       FROM employees s CROSS JOIN employees t WHERE s.id = $2 AND t.id = $3`, [randomUUID(), sourceId, targetId]);
     await this.database.query(`UPDATE employees target SET rfc = COALESCE(target.rfc, source.rfc), imss = COALESCE(target.imss, source.imss),
-      branch_id = COALESCE(target.branch_id, source.branch_id), position = COALESCE(target.position, source.position), updated_at = NOW()
+      branch_id = COALESCE(target.branch_id, source.branch_id),company_id=COALESCE(target.company_id,source.company_id), position = COALESCE(target.position, source.position), updated_at = NOW()
       FROM employees source WHERE target.id = $1 AND source.id = $2`, [targetId, sourceId]);
     for (const [table, column] of [['branch_assignments', 'branch_id'], ['schedule_assignments', 'schedule_id']]) {
       await this.database.query(`INSERT INTO ${table} (id, employee_id, ${column}, effective_from)

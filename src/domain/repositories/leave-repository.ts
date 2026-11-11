@@ -1,10 +1,12 @@
 import type { LeaveEvent, LeaveFilters, LeaveInput, LeaveDetails, LeaveProfile, LeaveProfileInput, LeaveRequest, LeaveStatus, VacationMovement } from '../entities/leave.js';
 import type { Employee } from '../entities/employee.js';
 import type { EmployeeAttendanceHistory } from './employee-attendance-repository.js';
+import type { AuthAccount } from '../entities/auth.js';
 
 export interface LeaveContext { employee: Employee; profile: LeaveProfile; history: EmployeeAttendanceHistory }
 
 export interface LeaveSession {
+  decisionAccount(id: string): Promise<Pick<AuthAccount,'role' | 'employeeId' | 'isActive' | 'version'> | undefined>;
   context(employeeId: string, from: string, to: string): Promise<LeaveContext>;
   profile(employeeId: string): Promise<LeaveProfile>;
   saveProfile(employeeId: string, input: LeaveProfileInput): Promise<LeaveProfile>;

@@ -70,6 +70,15 @@ import { PrismaAuthRepository } from './infrastructure/repositories/auth-reposit
 import { ArgonPasswordHasher } from './infrastructure/security/password-hasher.js';
 import { BranchAccessControl } from './infrastructure/security/access-control.js';
 import type { AuthPrincipal } from './domain/entities/auth.js';
+import { PrismaEmployeeContactRepository } from './infrastructure/repositories/employee-contact-repository.js';
+import { PrismaEmployeePortalRepository } from './infrastructure/repositories/employee-portal-repository.js';
+import { IssueEmployeeAccess } from './domain/use-cases/issue-employee-access.js';
+import { PrismaEmployeeAccessIssuer } from './infrastructure/repositories/employee-access-issuer.js';
+import { MicrosoftGraphEmail } from './infrastructure/integrations/microsoft-graph-email.js';
+import { EmailWorker } from './infrastructure/jobs/email-worker.js';
+import type { EmailSettings } from './infrastructure/config/email.js';
+import type { EmailGateway } from './domain/datasources/email-gateway.js';
+import { PrismaCompanyRepository } from './infrastructure/repositories/company-repository.js';
 
 export function createAttendanceEvaluation(database: Database, organization: PrismaOrganizationDatasource) {
   return new AttendanceEvaluationService(new EvaluationRepositoryImpl(new PrismaEvaluationDatasource(database,
@@ -88,6 +97,7 @@ export function createEmployeeNames(database: Database) {
 export interface AppDependencies {
   authentication?: { testPrincipal: AuthPrincipal };
   database?: Database; clients?: DeviceClientFactory; photoBridge?: PhotoClient;
+  email?: { settings: EmailSettings; gateway?: EmailGateway };
   whatsapp?: { configuration: WhatsAppConfiguration; messaging?: WhatsAppMessaging; handler?: WhatsAppMessageHandler; now?: () => Date };
 }
 
@@ -98,6 +108,9 @@ export async function buildApp(dependencies: AppDependencies = {}) {
       random: () => randomBytes(32).toString('base64url'), hash: value => createHash('sha256').update(value).digest('hex'),
     }, env.AUTH_SESSION_HOURS);
     const access = new BranchAccessControl(database);
+    const emailSettings: EmailSettings = dependencies.email?.settings ?? { enabled: env.EMAIL_ENABLED,encryptionKey: env.EMAIL_ENCRYPTION_KEY,publicUrl: env.APP_PUBLIC_URL };
+    const employeeAccess = new IssueEmployeeAccess(new PrismaEmployeeAccessIssuer(database,emailSettings),new ArgonPasswordHasher(),() => randomBytes(18).toString('base64url'));
+    const emailWorker = emailSettings.enabled ? new EmailWorker(database,dependencies.email?.gateway ?? new MicrosoftGraphEmail({ tenantId: env.MICROSOFT_TENANT_ID,clientId: env.MICROSOFT_CLIENT_ID,clientSecret: env.MICROSOFT_CLIENT_SECRET,senderId: env.MICROSOFT_SENDER_ID }),emailSettings.encryptionKey) : undefined;
     const whatsappConfig = dependencies.whatsapp?.configuration ?? whatsappConfiguration(env);
     const whatsappRepository = new PrismaWhatsAppRepository(database);
     const whatsappNow = dependencies.whatsapp?.now ?? (() => new Date());
@@ -123,7 +136,7 @@ export async function buildApp(dependencies: AppDependencies = {}) {
     const leave = new ManageLeave(new PrismaLeaveRepository(database, async (client) => {
       await organizationDatasource.refreshCurrentBranches(client);
       await evaluation.evaluate(createEvaluationSession(client));
-    },env.PHONE_DEFAULT_COUNTRY), (value) => createHash('sha256').update(value).digest('hex'));
+    },env.PHONE_DEFAULT_COUNTRY,emailSettings), (value) => createHash('sha256').update(value).digest('hex'));
     const branchConfiguration = new BranchConfigurationService(new BranchConfigurationRepositoryImpl(new PrismaBranchConfigurationDatasource(database)), evaluation);
     const registry = createEmployeeRegistry(database, organizationDatasource);
     const employeeNames = createEmployeeNames(database);
@@ -135,7 +148,8 @@ export async function buildApp(dependencies: AppDependencies = {}) {
     const updateEmployee = new UpdateEmployee(new PrismaUnitOfWork(database, (client) => ({
       employees: new EmployeeRepositoryImpl(new PrismaEmployeeDatasource(client)),
       employeeScheduling: new EmployeeSchedulingRepositoryImpl(new PrismaEmployeeSchedulingDatasource(client)),
-      employeeLeave: new PrismaLeaveSession(client, async () => { await evaluation.evaluate(createEvaluationSession(client)); },env.PHONE_DEFAULT_COUNTRY),
+      employeeContacts: new PrismaEmployeeContactRepository(client,env.PHONE_DEFAULT_COUNTRY),
+      employeeLeave: new PrismaLeaveSession(client, async () => { await evaluation.evaluate(createEvaluationSession(client)); },env.PHONE_DEFAULT_COUNTRY,emailSettings),
     })));
     const clients = dependencies.clients ?? new ZktecoClientFactory();
     const photoBridge = dependencies.photoBridge ?? new ZktecoPhotoBridgeClient(env.ZK_PHOTO_BRIDGE_URL);
@@ -148,19 +162,21 @@ export async function buildApp(dependencies: AppDependencies = {}) {
     const userSyncService = new UserSyncService(users, syncRuns, clients, syncService, recalculate);
     const userPhotoSyncService = new UserPhotoSyncService(users, photos, syncRuns, photoBridge, syncService);
     const app = await createHttpServer({
-      auth, access, authentication: { origins: env.AUTH_ALLOWED_ORIGINS, secureCookie: env.AUTH_COOKIE_SECURE, sessionHours: env.AUTH_SESSION_HOURS, ...dependencies.authentication },
+      companies: new PrismaCompanyRepository(database),
+      auth, access, employeeAccess, portal: new PrismaEmployeePortalRepository(database,env.PHONE_DEFAULT_COUNTRY), contacts: new PrismaEmployeeContactRepository(database,env.PHONE_DEFAULT_COUNTRY), authentication: { origins: env.AUTH_ALLOWED_ORIGINS, secureCookie: env.AUTH_COOKIE_SECURE, sessionHours: env.AUTH_SESSION_HOURS, ...dependencies.authentication },
       devices, attendance, syncRuns, users, photos, employees, organization, profiles, registry, evaluation, updateEmployee, employeeScheduling, employeeAttendance, branchConfiguration, branchAttendance, overtimeReport, attendanceFile,
       clients, syncService, userSyncService, userPhotoSyncService, deviceClock, deviceUserRole, leave, whatsapp, defaultDriver: env.ZK_DRIVER,
       checkHealth: async () => { await database.query('SELECT 1'); },
     }, persistenceError);
-    const scheduler = new SyncScheduler(devices, syncService, env.SYNC_INTERVAL_SECONDS, app.log);
+    const scheduler = new SyncScheduler(devices, syncService, env.SYNC_INTERVAL_SECONDS, app.log, env.SYNC_ENABLED);
     const whatsappWorker = whatsapp ? new WhatsAppWorker(whatsappRepository,whatsapp.scope,whatsapp.inbox,whatsapp.send,app.log,whatsappNow) : undefined;
     app.addHook('onClose', async () => {
       await scheduler.stop();
       await whatsappWorker?.stop();
+      await emailWorker?.stop();
       if (!dependencies.database) await database.close();
     });
-    return { app, database, auth, devices, employees, organization, evaluation, employeeNames, syncService, userSyncService, userPhotoSyncService, scheduler, whatsapp, whatsappWorker };
+    return { app, database, auth, devices, employees, organization, evaluation, employeeNames, syncService, userSyncService, userPhotoSyncService, scheduler, whatsapp, whatsappWorker, emailWorker };
   } catch (error) {
     if (!dependencies.database) await database.close();
     throw error;

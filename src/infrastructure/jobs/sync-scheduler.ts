@@ -9,10 +9,10 @@ export class SyncScheduler {
   private inFlight?: Promise<void>;
   private readonly lastScheduledAt = new Map<string, number>();
   constructor(private readonly devices: DeviceRepository, private readonly syncService: Pick<SyncService, 'sync'>,
-    private readonly intervalSeconds: number, private readonly logger: SchedulerLogger = console) {}
+    private readonly intervalSeconds: number, private readonly logger: SchedulerLogger = console, private readonly enabled = true) {}
 
   start(): void {
-    if (this.timer) return;
+    if (!this.enabled || this.timer) return;
     this.timer = setInterval(() => void this.syncAll(), this.intervalSeconds * 1000);
     this.timer.unref();
   }

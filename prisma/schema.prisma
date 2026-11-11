@@ -323,6 +323,11 @@ model employee_unification_snapshots {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model employees {
+  company_id String? @db.Uuid
+  company companies? @relation(fields: [company_id], references: [id])
+  access_account auth_accounts?
+  contact employee_contacts?
+  emails email_outbox[]
   device_user_role_changes device_user_role_changes[]
   whatsapp_conversations whatsapp_conversations[]
   whatsapp_messages whatsapp_messages[]
@@ -519,6 +524,7 @@ model vacation_movements {
 }
 
 model leave_request_events {
+  email email_outbox?
   actor_account_id String? @db.Uuid
   actor_account auth_accounts? @relation(fields: [actor_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   id String @id @db.Uuid
@@ -537,6 +543,10 @@ model leave_request_events {
 }
 
 model auth_accounts {
+  employee_id String? @unique @db.Uuid
+  employee employees? @relation(fields: [employee_id], references: [id])
+  temporary_password_expires_at DateTime? @db.Timestamptz(6)
+  emails email_outbox[]
   id String @id @db.Uuid
   username String @unique
   name String
@@ -552,6 +562,58 @@ model auth_accounts {
   audit auth_audit_events[]
   leave_events leave_request_events[]
   vacation_movements vacation_movements[]
+}
+
+model companies {
+  id String @id @db.Uuid
+  name String
+  code String?
+  active Boolean @default(true)
+  notes String @default("")
+  version Int @default(1)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  employees employees[]
+}
+
+model blood_types {
+  code String @id
+  contacts employee_contacts[]
+}
+
+model employee_contacts {
+  employee_id String @id @db.Uuid
+  email String?
+  alternate_phone String?
+  blood_type String?
+  version Int @default(1)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  employee employees @relation(fields: [employee_id], references: [id])
+  type blood_types? @relation(fields: [blood_type], references: [code])
+}
+
+model email_outbox {
+  id String @id @db.Uuid
+  event_id String? @unique @db.Uuid
+  employee_id String @db.Uuid
+  account_id String? @db.Uuid
+  account_version Int?
+  kind String
+  recipient String
+  encrypted_content String?
+  state String @default("pending")
+  attempts Int @default(0)
+  next_attempt_at DateTime @default(now()) @db.Timestamptz(6)
+  lease_until DateTime? @db.Timestamptz(6)
+  lease_token String? @db.Uuid
+  expires_at DateTime @db.Timestamptz(6)
+  error_code String?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  completed_at DateTime? @db.Timestamptz(6)
+  event leave_request_events? @relation(fields: [event_id], references: [id])
+  employee employees @relation(fields: [employee_id], references: [id])
+  account auth_accounts? @relation(fields: [account_id], references: [id])
+  @@index([state,next_attempt_at], map: "email_outbox_pending_idx")
 }
 
 model auth_account_branches {

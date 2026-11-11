@@ -25,6 +25,11 @@ export class BranchAccessControl implements AccessControl {
     z.string().uuid().parse(id);
     const principal = this.current();
     if (!principal) throw new AppError('Inicia sesión.', 'UNAUTHORIZED');
+    if (kind === 'leave' && principal.employeeId) {
+      const related = (await this.database.query('SELECT id FROM leave_requests WHERE id=$1 AND (employee_id=$2 OR manager_id=$2)', [id, principal.employeeId])).rows.length;
+      if (related) return;
+    }
+    if (principal.role === 'employee') throw new AppError('El recurso no está disponible para tu cuenta.', 'FORBIDDEN');
     const rows = (await this.database.query<{ branch_id: string | null }>(resourceQueries[kind], [id])).rows;
     if (!rows.length || rows.some(row => !canAccessBranch(principal, row.branch_id))) throw new AppError('El recurso no está disponible en tus sucursales autorizadas.', 'FORBIDDEN');
     if (kind === 'clockRecord' && principal.role !== 'admin') {
