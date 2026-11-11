@@ -8,3 +8,8 @@ export const accountSchema = z.object({
   branchIds: z.array(z.string().uuid()).max(100).refine(ids => new Set(ids).size === ids.length, 'No repitas sucursales.'),
   isActive: z.boolean(), password: passwordSchema.optional(),
 });
+
+export const employeeAccessSchema = z.union([
+  z.object({ username: accountSchema.shape.username, delivery: z.literal('manual'), password: passwordSchema }).strict(),
+  z.object({ username: accountSchema.shape.username, delivery: z.literal('email').default('email') }).strict(),
+]);

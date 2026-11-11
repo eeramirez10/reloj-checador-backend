@@ -17,13 +17,21 @@ RH puede elegir un jefe de otra sucursal mediante un catálogo reducido de ID, n
 
 ## Pantallas
 
-1. Editar empleado → **Contacto**: registrar correo, WhatsApp, teléfono alterno y tipo de sangre; guardar.
+1. Editar empleado → **Contacto**: registrar los datos de contacto que se necesiten y guardar. El correo es opcional para el acceso manual.
 2. Editar empleado → **Permisos y vacaciones**: asignar jefe y saldo.
-3. Editar empleado → **Acceso al sistema**: capturar usuario y pulsar **Crear y enviar acceso**.
-4. El destinatario recibe usuario, contraseña temporal y la URL pública. La contraseña vence a las 24 horas y debe cambiarse en el primer acceso.
+3. Editar empleado → **Acceso al sistema**: capturar usuario. La entrega inicia en **Manual, sin correo**: escribir o generar una contraseña temporal, copiarla y pulsar **Crear acceso manual**. Entregar usuario, contraseña y URL directamente al empleado.
+4. La contraseña vence a las 24 horas y debe cambiarse en el primer acceso. Opcionalmente, elegir **Enviar por correo** y **Crear y enviar acceso** cuando el correo del empleado y la configuración de envío estén listos.
 5. El jefe usa **Mis permisos → Por autorizar / mi equipo** o el enlace del correo para revisar y resolver.
 
 En **Cuentas de acceso**, el administrador puede vincular cuentas existentes con empleados. Una cuenta de encargado sin vínculo conserva sus consultas por sucursal, pero necesita vincularse al jefe para resolver permisos.
+
+### Crear cuentas sin Microsoft 365
+
+En **Cuentas de acceso**, todos los roles permiten escribir o generar una contraseña temporal. Al crear una cuenta de empleado, seleccionar su ficha activa e identificada y guardar crea la cuenta y el vínculo de forma atómica; se respetan nombre, usuario y estado capturados. Al editar, una contraseña vacía conserva la anterior.
+
+La entrega manual, tanto desde Cuentas de acceso como desde el expediente, no exige correo del empleado, `EMAIL_ENCRYPTION_KEY` ni credenciales de Microsoft. No crea mensajes en la cola ni devuelve contraseñas en respuestas de API. La contraseña capturada permanece únicamente en el formulario hasta cerrarlo, para poder copiarla; en la cuenta solo se guarda su hash. Regenerarla revoca las sesiones anteriores y mantiene una sola cuenta vinculada.
+
+`POST /employees/:id/access` acepta `{username,delivery:'manual',password}` o `{username,delivery:'email'}`. Por compatibilidad, omitir `delivery` conserva el flujo de correo existente. La respuesta es `{username,emailId}`, con `emailId:null` para entrega manual. El envío por correo sigue exigiendo dirección y clave de cifrado. Mientras Microsoft 365 esté pendiente, mantener `EMAIL_ENABLED=false` y utilizar entrega manual.
 
 ## Configurar Microsoft 365
 

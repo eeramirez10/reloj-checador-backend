@@ -6,8 +6,7 @@ import { leaveCreateSchema, leaveInputSchema } from '../validators/leave.js';
 import { employeeAttendanceQuerySchema } from '../validators/employee-attendance.js';
 import { formatDateTimeInTimeZone } from '../../domain/entities/attendance-summary.js';
 import { idParams } from '../validators/common.js';
-import { accountSchema } from '../validators/auth.js';
-import { z } from 'zod';
+import { employeeAccessSchema } from '../validators/auth.js';
 
 export function registerEmployeePortalRoutes(app: FastifyInstance, services: ApplicationServices) {
   const { access,portal,employeeAttendance,leave } = services;
@@ -20,7 +19,10 @@ export function registerEmployeePortalRoutes(app: FastifyInstance, services: App
   app.get('/manager-options', () => portal.managers());
   app.get('/employees/:id/contact', request => services.contacts.get(idParams.parse(request.params).id));
   app.get('/employees/:id/access', request => portal.access(idParams.parse(request.params).id));
-  app.post('/employees/:id/access', request => services.employeeAccess.execute(idParams.parse(request.params).id,z.object({ username: accountSchema.shape.username }).strict().parse(request.body).username,access.current()!));
+  app.post('/employees/:id/access', request => {
+    const input = employeeAccessSchema.parse(request.body);
+    return services.employeeAccess.execute(idParams.parse(request.params).id,input.username,access.current()!,input);
+  });
   app.get('/me/profile', () => portal.profile(employeeId()));
   app.put('/me/contact', request => portal.saveContact(employeeId(),selfContactSchema.parse(request.body),access.current()!.id));
   app.get('/me/attendance/today', async () => {
