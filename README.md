@@ -22,6 +22,10 @@ La clasificación de empleados por empresa, sus filtros y exportaciones están d
 
 La eliminación de pendientes sin checadas, recuperación automática y búsqueda del reporte de tarjetas están en [docs/pending-cleanup-attendance-search.md](docs/pending-cleanup-attendance-search.md).
 
+## Recuperar checadas tras una interrupción de red
+
+**Checadas → Recuperar ayer y hoy** y **Sincronización** permiten descargar manualmente los registros pendientes de uno o varios relojes, con progreso, errores por equipo e historial. Reutilizan la descarga acumulativa e idempotente y recalculan asistencia y extras. Ver [docs/attendance-recovery.md](docs/attendance-recovery.md).
+
 ## Trabajo autorizado y corrección de permisos
 
 Home office, visitas a cliente, horas opcionales, cancelación administrativa y solicitudes corregidas están documentados en [docs/offsite-leave.md](docs/offsite-leave.md). La asignación múltiple de empleados se describe en [docs/companies.md](docs/companies.md).
