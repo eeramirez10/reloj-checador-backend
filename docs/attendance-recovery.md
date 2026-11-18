@@ -3,19 +3,25 @@
 ## Uso
 
 1. Conecta el servidor a una red desde la que alcance las IP y puertos de los relojes.
-2. Entra con RH o administrador a **Asistencia → Checadas → Recuperar ayer y hoy**, o a **Administración → Sincronización**.
-3. Selecciona una sucursal y un reloj, o todos los relojes autorizados. Desde Checadas se precargan sus filtros actuales.
-4. Pulsa **Recuperar ayer y hoy**. Se consulta un reloj a la vez y se muestra su avance, registros leídos y registros nuevos.
+2. Entra con RH o administrador a **Asistencia → Checadas → Recuperar por fecha**, o a **Administración → Sincronización**.
+3. Selecciona **Fecha a recuperar**, sucursal y reloj, o todos los relojes autorizados. Desde Checadas se precargan la fecha y los filtros actuales; desde Sincronización se propone hoy y se puede cambiar.
+4. Pulsa **Recuperar por fecha**. Se consulta un reloj a la vez y se muestra su avance, registros leídos del día y registros nuevos del día.
 5. Revisa los resultados. Una falla de conexión no impide intentar los demás relojes. **Reintentar pendientes** repite únicamente los fallidos/no intentados; la acción principal permite repetir toda la selección.
-6. Cierra el diálogo y consulta ayer u hoy en Checadas. Las consultas de asistencia, tarjetas, incidencias, extras e historial se invalidan al terminar, incluso ante un error con avances parciales.
+6. Cierra el diálogo y consulta la fecha elegida en Checadas. Las consultas de asistencia, tarjetas, incidencias, extras e historial se invalidan al terminar, incluso ante un error con avances parciales. Cambiar la fecha o los filtros limpia los resultados anteriores.
 
 **Actualizar** o **Actualizar historial** consulta la base de datos; no descarga checadas del reloj.
 
 ## Qué recupera
 
-La acción reutiliza `POST /devices/:id/sync-attendance`: lee todos los registros que conserva el equipo, incluidos ayer, hoy y fechas anteriores. Las fechas del diálogo son una referencia en la zona horaria de cada reloj; los conteos corresponden a la descarga completa. No se descarta el histórico porque puede ser necesario para cerrar rutas que comenzaron antes del periodo.
+La acción utiliza `POST /devices/:id/sync-attendance` con `{date:'YYYY-MM-DD'}`. El calendario debe ser válido; los campos desconocidos se rechazan antes de contactar al reloj. El día abarca desde las 00:00 locales inclusive hasta las 00:00 del siguiente día exclusive, usando `device.timeZone` o `America/Mexico_City` si falta. Por ejemplo, una misma marca a las 05:30 UTC pertenece al día anterior en México y al día actual en Cancún.
 
-La descarga conserva el comportamiento acumulativo y las identidades existentes: guarda únicamente eventos nuevos, reconoce repeticiones y mantiene UUID, segundos y evidencia original. No modifica el reloj ni elimina checadas. Una descarga vacía conserva lo que ya existe, pero no demuestra que se haya recuperado información; la interfaz lo señala.
+El equipo puede devolver su historial completo, pero el backend filtra por la fecha antes de preparar usuarios y guardar eventos. No se crean fichas ni checadas a partir de otros días de esa descarga. `receivedCount` e `insertedCount` corresponden únicamente al día elegido. La respuesta confirma además `date` y `timeZone`; el frontend valida que la fecha coincida con la solicitada.
+
+Omitir `date` conserva la sincronización completa existente para el scheduler, compatibilidad y acciones generales. Esos intentos mantienen sus conteos de descarga completa. El historial lista los conteos del alcance de cada intento.
+
+El recálculo utiliza todo el historial ya guardado y puede actualizar fechas relacionadas. Si una ruta cruza días y falta su entrada o regreso, recupera también ese otro día: el sistema vuelve a enlazar las marcas disponibles sin inventar checadas ni horas.
+
+La descarga conserva el comportamiento acumulativo y las identidades existentes: guarda únicamente eventos nuevos del día, reconoce repeticiones y mantiene UUID, segundos y evidencia original. No modifica el reloj ni elimina checadas. Una descarga sin coincidencias para la fecha conserva lo que ya existe y la interfaz lo señala.
 
 La sincronización manual puede utilizarse aunque el reloj tenga pausada la sincronización automática, sin reactivarla ni cambiar sus intervalos. Mantiene autenticación, CSRF, alcance por sucursal y bloqueo de operación por reloj. Encargados y empleados no pueden iniciarla.
 
@@ -30,6 +36,6 @@ La sincronización manual puede utilizarse aunque el reloj tenga pausada la sinc
 
 ## Verificación y publicación
 
-`tests/attendance-recovery.integration.test.ts` verifica desconexión y recuperación, repetición sin duplicados, conservación de registros originales, rutas entre ayer y hoy, avance parcial ante fallo de recálculo, sincronización manual con el automático pausado y bloqueo de peticiones simultáneas. Las pruebas usan bases aisladas y relojes simulados.
+`tests/attendance-recovery.integration.test.ts` verifica desconexión y recuperación, repetición sin duplicados, límites exactos de medianoche, zonas México/Cancún, exclusión de usuarios de otros días, rechazo de fechas inválidas, conservación de originales, rutas recuperadas por días en distinto orden, avance parcial ante fallo de recálculo, sincronización manual con el automático pausado y bloqueo de peticiones simultáneas. Las pruebas usan bases aisladas y relojes simulados.
 
-Esta función reutiliza el endpoint existente y no agrega migraciones. Publicar el frontend compilado con `VITE_APP_BASE_PATH=/reloj/`, `VITE_API_BASE_URL=/reloj/api` y `npm run build -- --outDir dist-reloj`, conservando la configuración de Caddy y del backend. La recuperación debe ejecutarse desde el servidor Windows conectado a la red de relojes.
+No agrega migraciones. Actualizar primero el backend para habilitar el filtro `date`, reiniciar su servicio y publicar el frontend compilado con `VITE_APP_BASE_PATH=/reloj/`, `VITE_API_BASE_URL=/reloj/api` y `npm run build -- --outDir dist-reloj`, conservando entornos y Caddy. Se deben publicar ambos repositorios: la versión anterior del backend no filtraba por día. La recuperación se ejecuta en el backend Windows conectado a la red de relojes.

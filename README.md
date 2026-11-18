@@ -24,7 +24,7 @@ La eliminación de pendientes sin checadas, recuperación automática y búsqued
 
 ## Recuperar checadas tras una interrupción de red
 
-**Checadas → Recuperar ayer y hoy** y **Sincronización** permiten descargar manualmente los registros pendientes de uno o varios relojes, con progreso, errores por equipo e historial. Reutilizan la descarga acumulativa e idempotente y recalculan asistencia y extras. Ver [docs/attendance-recovery.md](docs/attendance-recovery.md).
+**Checadas → Recuperar por fecha** y **Sincronización** permiten elegir un día y recuperar sus registros de uno o varios relojes, con progreso, errores por equipo e historial. La fecha se interpreta en la zona de cada reloj; solo se guardan y cuentan las checadas de ese día, sin duplicarlas, y se recalculan asistencia y extras. Ver [docs/attendance-recovery.md](docs/attendance-recovery.md).
 
 ## Trabajo autorizado y corrección de permisos
 

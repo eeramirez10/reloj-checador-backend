@@ -4,6 +4,7 @@ import type { DeviceClientFactory } from '../datasources/device-client.js';
 import type { SyncRepository } from '../repositories/sync-repository.js';
 import type { SyncRun } from '../entities/sync-run.js';
 import { SyncAlreadyRunningError, errorMessage } from '../errors/app-error.js';
+import { addDays, dateAtLocalTime } from '../entities/local-date.js';
 export { SyncAlreadyRunningError };
 
 export class SyncService {
@@ -13,19 +14,26 @@ export class SyncService {
     private readonly onSynced?: () => Promise<unknown>,
     private readonly onAttendanceUsers?: (deviceId: string, userIds: string[]) => Promise<void>) {}
 
-  async sync(device: Device): Promise<SyncRun> {
+  async sync(device: Device, date?: string): Promise<SyncRun> {
+    const timeZone = device.timeZone ?? 'America/Mexico_City';
+    const period = date ? {
+      start: dateAtLocalTime(date, '00:00', timeZone).getTime(),
+      end: dateAtLocalTime(addDays(date, 1), '00:00', timeZone).getTime(),
+    } : undefined;
     return this.withDeviceLock(device, async () => {
       const run = await this.syncRuns.start(device.id);
       let received = 0;
       let inserted = 0;
       try {
-        const events = await this.clients.getClient(device).getAttendance(device);
+        const downloaded = await this.clients.getClient(device).getAttendance(device);
+        const events = period ? downloaded.filter(event =>
+          event.occurredAt.getTime() >= period.start && event.occurredAt.getTime() < period.end) : downloaded;
         received = events.length;
         await this.onAttendanceUsers?.(device.id, events.map((event) => event.userId));
         if (this.attendance.insertBatchIfNew) inserted = await this.attendance.insertBatchIfNew(device.id, events);
         else for (const event of events) if (await this.attendance.insertIfNew(device.id, event)) inserted += 1;
         await this.onSynced?.();
-        return await this.syncRuns.finish(run.id, 'succeeded', { received: events.length, inserted });
+        return await this.syncRuns.finish(run.id, 'succeeded', { received, inserted });
       } catch (error) {
         try { await this.syncRuns.finish(run.id, 'failed', { received, inserted }, errorMessage(error)); }
         catch (recordingError) { throw new AggregateError([error, recordingError], 'Falló la sincronización y no se pudo registrar el resultado.'); }

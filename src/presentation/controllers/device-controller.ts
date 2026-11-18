@@ -5,6 +5,7 @@ import { idParams } from '../validators/common.js';
 import { createDeviceSchema, deviceSchema, deviceFilterSchema, photoSyncSchema, photoParams, userListSchema } from '../validators/device.js';
 import { z } from 'zod';
 import { manualClockTimeSchema } from '../validators/device-clock.js';
+import { dateSchema } from '../validators/organization.js';
 
 export class DeviceController {
   constructor(private readonly services: ApplicationServices) {}
@@ -63,7 +64,12 @@ export class DeviceController {
     return this.services.deviceClock.setManually(await this.device(request), localTime);
   };
 
-  syncAttendance = async (request: FastifyRequest) => this.services.syncService.sync(await this.device(request));
+  syncAttendance = async (request: FastifyRequest) => {
+    const { date } = z.object({ date: dateSchema.optional() }).strict().parse(request.body ?? {});
+    const device = await this.device(request);
+    const run = await this.services.syncService.sync(device, date);
+    return date ? { ...run, date, timeZone: device.timeZone ?? 'America/Mexico_City' } : run;
+  };
 
   syncUsers = async (request: FastifyRequest) => {
     await this.services.organization.refreshCurrentBranches();
